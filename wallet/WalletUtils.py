@@ -46,7 +46,8 @@ class WalletUtils:
         return result
 
     async def _init_wallet_async(self, mnemonics, testnet=False):
-        # imported lazily: TonTools pins pydantic 1.x, which conflicts with aiogram's pydantic 2.x
+        # Not in requirements.txt: TonTools pins pydantic 1.x and cannot be resolved alongside
+        # aiogram's pydantic 2.x. Imported lazily so the rest of the project runs without it.
         from TonTools import TonCenterClient
 
         wallet_data, wallet_address = self.wallet_from_mnemonics(mnemonics=mnemonics)

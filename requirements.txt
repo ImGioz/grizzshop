@@ -20,9 +20,9 @@ pytoniq-core==0.1.46
 # tonsdk is still used for public-key derivation in FragmentApi/PaymentGet.py
 tonsdk==1.0.15
 
-# Only needed by WalletUtils.init_wallet, imported lazily. Pins pydantic 1.x, which clashes
-# with aiogram's pydantic 2.x — drop this line if you never call init_wallet.
-TonTools==2.1.2
+# TonTools is deliberately absent: it pins pydantic 1.x and cannot be resolved alongside
+# aiogram's pydantic 2.x. Its only user is WalletUtils.init_wallet, which the shop never calls
+# and which imports it lazily — install it by hand in a separate venv if you ever need it.
 
 # pkg_resources was removed in setuptools 82; the `ton` package still imports it
 setuptools<81
