@@ -1,0 +1,28 @@
+# Telegram bots
+aiogram==3.30.0
+aiosqlite==0.22.1
+python-dotenv==1.2.2
+
+# Monobank receipt links: drives a real browser past the invisible reCAPTCHA
+playwright==1.62.0
+
+# PDF receipts from any bank: pure Python, no system libraries needed
+pdfplumber==0.11.10
+
+# Fragment API
+requests==2.31.0
+
+# TON: tonutils is the one that can derive and sign W5 (Telegram Wallet) wallets
+tonutils==2.1.2
+ton-core==0.3.6
+pytoniq-core==0.1.46
+
+# tonsdk is still used for public-key derivation in FragmentApi/PaymentGet.py
+tonsdk==1.0.15
+
+# Only needed by WalletUtils.init_wallet, imported lazily. Pins pydantic 1.x, which clashes
+# with aiogram's pydantic 2.x — drop this line if you never call init_wallet.
+TonTools==2.1.2
+
+# pkg_resources was removed in setuptools 82; the `ton` package still imports it
+setuptools<81
