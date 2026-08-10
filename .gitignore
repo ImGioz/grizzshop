@@ -6,3 +6,4 @@ shop.db
 venv/
 __pycache__/
 *.pyc
+backups/
