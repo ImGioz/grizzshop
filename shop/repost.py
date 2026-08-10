@@ -18,7 +18,7 @@ from shop.config import CHANNEL_ID
 logger = logging.getLogger(__name__)
 router = Router()
 
-TRIGGER_TAGS = ("новина", "гифт", "подарунок", "продажа")
+TRIGGER_TAGS = ("новина", "гифт", "подарунок", "продажа", "newNFT", "xar1zmaNFT", "продажнфт")
 
 # Tags may be written in any case and are stripped wherever they appear in the post.
 TAG_PATTERN = re.compile(r"#(?:" + "|".join(TRIGGER_TAGS) + r")\b", re.IGNORECASE | re.UNICODE)
