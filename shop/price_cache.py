@@ -62,11 +62,13 @@ async def find(model: str | None, symbol: str | None, backdrop: str | None,
 
 
 async def warm(gifts, delay: float = 0.5) -> int:
-    """Refresh prices for a batch of gifts, pacing the calls so Portals does not throttle us."""
+    """Refresh prices for a batch of owned gifts, pacing the calls so Portals does not throttle us."""
+    from shop.nft_stock import valuation_traits  # imported here: nft_stock imports this module
+
     updated = 0
     for gift in gifts:
         try:
-            await find(gift.model, gift.symbol, gift.backdrop, refresh=True)
+            await find(*valuation_traits(gift), refresh=True)
             updated += 1
         except nft_market.MarketError as error:
             logger.warning("cannot refresh price for %s: %s", gift.details, error)

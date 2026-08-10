@@ -98,11 +98,32 @@ async def available(bot: Bot, limit: int = 100) -> list[StockGift]:
     return gifts
 
 
+def valuation_traits(gift: "StockGift") -> tuple[str | None, str | None, str | None]:
+    """Traits a gift we own is valued by — the model alone, see `price_gift`.
+
+    Shared with the cache warmer so both look under the same key; otherwise every showcase
+    would miss the cache and go to Portals live.
+    """
+    # Without a model there is nothing to compare against, so fall back to the full trait search.
+    if not gift.model:
+        return gift.model, gift.symbol, gift.backdrop
+    return gift.model, None, None
+
+
 async def price_gift(gift: StockGift, markup_percent: Decimal, ton_rate: Decimal) -> StockGift:
-    """Price a gift from the marketplace floor for its exact traits, cache first."""
+    """Price a gift we already own, from the marketplace floor for its model.
+
+    Deliberately the model floor and not the exact trait combination: this gift is already
+    ours, so the floor is a valuation, not a cost we have to cover. Pricing off the closest
+    comparable inflated it badly — a rare backdrop with no listings of its own pushed one
+    Flying Broom to 20 TON while any Colorless could be had for 14.
+
+    Orders from the marketplace are the opposite case and keep the strict search: there the
+    gift still has to be bought, so the price of the actual substitute is what matters.
+    """
     from shop import price_cache
 
-    listing, _, _ = await price_cache.find(gift.model, gift.symbol, gift.backdrop)
+    listing, _, _ = await price_cache.find(*valuation_traits(gift))
     if listing:
         gift.floor_ton = listing.price
         gift.price_uah = (listing.price * ton_rate * (1 + markup_percent / 100)).quantize(Decimal("1"))
