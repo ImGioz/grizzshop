@@ -20,7 +20,7 @@ from shop import nft_stock
 from shop import price_cache
 from shop import reviews
 from shop import runtime
-from shop.config import ADMIN_IDS, CHANNEL_ID, MIN_STARS, NFT_MARKUP_PERCENT
+from shop.config import ADMIN_IDS, CHANNEL_ID, MIN_STARS
 from shop.delivery import DeliveryError, deliver_gram, deliver_stars, parse_ton_address
 from shop.keyboards import (calculator_again_keyboard, calculator_keyboard,
                             check_payment_keyboard, crypto_check_keyboard,
@@ -68,10 +68,8 @@ def nft_price(floor_ton: Decimal, rate: Decimal | None = None) -> Decimal:
     TON at, so using it here multiplied the Gram margin by the NFT markup — a declared 10%
     turned into nearly 40%.
     """
-    from shop.config import NFT_MARKUP_PERCENT
-
     rate = rate or crypto.market_rate()
-    total = floor_ton * rate * (1 + NFT_MARKUP_PERCENT / 100)
+    total = floor_ton * rate * (1 + runtime.nft_markup_percent() / 100)
     return total.quantize(Decimal("1"), rounding=ROUND_CEILING)
 
 
@@ -925,7 +923,7 @@ async def nft_from_list(callback: CallbackQuery, state: FSMContext, bot: Bot):
     market = await asyncio.to_thread(crypto.market_rate)
     priced = []
     for gift in gifts[:STOCK_LIMIT]:
-        await nft_stock.price_gift(gift, NFT_MARKUP_PERCENT, market)
+        await nft_stock.price_gift(gift, runtime.nft_markup_percent(), market)
         if gift.price_uah:
             priced.append(gift)
 

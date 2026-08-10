@@ -66,6 +66,7 @@ class AdminStates(StatesGroup):
     edit_premium = State()
     edit_ton = State()
     edit_bulk = State()
+    edit_nft_markup = State()
 
 
 def button(text: str, *parts) -> InlineKeyboardButton:
@@ -380,6 +381,8 @@ def prices_keyboard() -> InlineKeyboardMarkup:
     rows.append([button(f"Опт: от {BULK_STARS_FROM} ⭐ по {PRICE_PER_STAR_BULK} грн",
                         "prices", "edit", "bulk")])
     rows.append([button(f"Курс TON — {TON_PRICE_UAH} грн", "prices", "edit", "ton")])
+    rows.append([button(f"Наценка на подарки — {runtime.nft_markup_percent()}%",
+                        "prices", "edit", "nft")])
     rows.append([button("⬅️ В меню", "menu", "show")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -402,6 +405,13 @@ async def edit_price(callback: CallbackQuery, state: FSMContext):
             f"<b>{BULK_STARS_FROM}</b> ⭐\n\n"
             f"Пришлите два числа через пробел: порог и ставку.\n"
             f"Например: <code>3000 0.72</code>", parse_mode="HTML")
+
+    if target == "nft":
+        await state.set_state(AdminStates.edit_nft_markup)
+        return await callback.message.edit_text(
+            f"Наценка на подарки: <b>{runtime.nft_markup_percent()}%</b> сверх цены маркета.\n\n"
+            f"Действует и на подарки с маркета, и на подарки из профиля.\n"
+            f"Пришлите новое значение числом, например <code>15</code>.", parse_mode="HTML")
 
     if target == "ton":
         await state.set_state(AdminStates.edit_ton)
@@ -450,6 +460,29 @@ async def save_price(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(f"Цена пакета {quantity} ⭐ теперь <b>{price}</b> грн", parse_mode="HTML",
+                         reply_markup=prices_keyboard())
+
+
+@router.message(AdminStates.edit_nft_markup)
+async def save_nft_markup(message: Message, state: FSMContext):
+    raw = (message.text or "").strip().replace(",", ".").rstrip("%")
+    try:
+        percent = Decimal(raw)
+    except InvalidOperation:
+        return await message.answer("Нужно число, например 15. Попробуйте ещё раз.")
+
+    # Ноль — законная наценка (продажа по цене маркета), а вот отрицательная означала бы
+    # продажу дешевле закупки, и почти наверняка это опечатка.
+    if not 0 <= percent <= 200:
+        return await message.answer("Наценка должна быть от 0 до 200 процентов.")
+
+    # Кэш маркета трогать не нужно: там лежат цены в TON, наценка накладывается поверх при
+    # каждом показе, поэтому новое значение действует сразу.
+    await db.set_setting(runtime.KEY_NFT_MARKUP, str(percent))
+    await reload_runtime()
+
+    await state.clear()
+    await message.answer(f"Наценка на подарки теперь <b>{percent}%</b>", parse_mode="HTML",
                          reply_markup=prices_keyboard())
 
 
