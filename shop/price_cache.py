@@ -10,7 +10,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from shop import db, nft_market
+from shop import db, nft_market, nft_tonnel
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,39 @@ async def find(model: str | None, symbol: str | None, backdrop: str | None,
     listing, quality = await asyncio.to_thread(nft_market.find_similar, model, symbol, backdrop)
     await db.store_price(key, _pack(listing, quality) if listing else {"quality": "none"})
     return listing, quality, False
+
+
+def tonnel_key(collection: str | None, model: str | None) -> str:
+    return "tonnel|" + "|".join((collection or "", model or "")).lower()
+
+
+async def tonnel_floor(collection: str | None, model: str | None,
+                       max_age: timedelta = MAX_AGE, refresh: bool = False) -> Decimal | None:
+    """Флор с Tonnel по коллекции и модели. None — если доступов нет или Tonnel недоступен.
+
+    Возвращая None вместо исключения, оставляет вызывающему коду возможность откатиться на
+    Portals: доступы Tonnel протухают за часы, и витрина не должна из-за этого падать.
+    """
+    if not nft_tonnel.available():
+        return None
+
+    key = tonnel_key(collection, model)
+    if not refresh:
+        stored = await db.cached_price(key)
+        if stored:
+            payload, updated_at = stored
+            if datetime.now(timezone.utc) - updated_at < max_age:
+                raw = payload.get("price")
+                return Decimal(raw) if raw else None
+
+    try:
+        price = await asyncio.to_thread(nft_tonnel.floor, collection, model)
+    except nft_tonnel.TonnelError as error:
+        logger.warning("tonnel: флор для %s/%s не получен: %s", collection, model, error)
+        return None
+
+    await db.store_price(key, {"price": str(price) if price is not None else ""})
+    return price
 
 
 async def warm(gifts, delay: float = 0.5) -> int:

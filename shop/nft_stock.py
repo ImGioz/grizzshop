@@ -123,10 +123,17 @@ async def price_gift(gift: StockGift, markup_percent: Decimal, ton_rate: Decimal
     """
     from shop import price_cache
 
-    listing, _, _ = await price_cache.find(*valuation_traits(gift))
-    if listing:
-        gift.floor_ton = listing.price
-        gift.price_uah = (listing.price * ton_rate * (1 + markup_percent / 100)).quantize(Decimal("1"))
+    # Tonnel — основной источник: он знает коллекцию подарка, поэтому не может подсунуть
+    # одноимённую модель из другой, более дешёвой коллекции.
+    floor_ton = await price_cache.tonnel_floor(gift.collection, gift.model)
+
+    if floor_ton is None:
+        listing, _, _ = await price_cache.find(*valuation_traits(gift))
+        floor_ton = listing.price if listing else None
+
+    if floor_ton:
+        gift.floor_ton = floor_ton
+        gift.price_uah = (floor_ton * ton_rate * (1 + markup_percent / 100)).quantize(Decimal("1"))
     return gift
 
 
