@@ -67,14 +67,11 @@ def tonnel_key(collection: str | None, model: str | None) -> str:
 
 async def tonnel_floor(collection: str | None, model: str | None,
                        max_age: timedelta = MAX_AGE, refresh: bool = False) -> Decimal | None:
-    """Флор с Tonnel по коллекции и модели. None — если доступов нет или Tonnel недоступен.
+    """Флор с Tonnel по коллекции и модели. None — если лотов нет или Tonnel недоступен.
 
     Возвращая None вместо исключения, оставляет вызывающему коду возможность откатиться на
-    Portals: доступы Tonnel протухают за часы, и витрина не должна из-за этого падать.
+    Portals: витрина не должна падать из-за чужого маркета.
     """
-    if not nft_tonnel.available():
-        return None
-
     key = tonnel_key(collection, model)
     if not refresh:
         stored = await db.cached_price(key)
