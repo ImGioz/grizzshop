@@ -129,7 +129,14 @@ async def price_gift(gift: StockGift, markup_percent: Decimal, ton_rate: Decimal
 
     if floor_ton is None:
         listing, _, _ = await price_cache.find(*valuation_traits(gift))
-        floor_ton = listing.price if listing else None
+        # Portals ищет модель по всему маркету, а названия моделей повторяются в разных
+        # коллекциях: "Soap Bubbles" есть и у Stellar Rocket за 11 TON, и у Lol Pop за 3.7.
+        # Без этой сверки подарок оценивался втрое дешевле себя.
+        if listing and (listing.name or "").strip().lower() == gift.collection.strip().lower():
+            floor_ton = listing.price
+        elif listing:
+            logger.warning("floor для %s пропущен: Portals отдал лот коллекции %r",
+                           gift.details, listing.name)
 
     if floor_ton:
         gift.floor_ton = floor_ton

@@ -35,7 +35,9 @@ echo "запушено"
 # -A пробрасывает ключ с макбука: у сервера своего доступа к приватному репозиторию нет,
 # и заводить его там не нужно — ключ живёт только здесь.
 # Рестарт отдельной командой после pull: если pull упадёт, бот продолжит работать на старом коде.
-ssh -A "$SERVER" "cd $REMOTE_DIR && git pull -q && systemctl restart $SERVICE"
+# pip перед рестартом: иначе коммит с новой зависимостью роняет бота, и поднять его
+# получается только вторым заходом.
+ssh -A "$SERVER" "cd $REMOTE_DIR && git pull -q && venv/bin/pip install -q -r requirements.txt && systemctl restart $SERVICE"
 sleep 6
 
 if ssh "$SERVER" "systemctl is-active --quiet $SERVICE"; then
