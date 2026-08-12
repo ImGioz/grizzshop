@@ -378,7 +378,7 @@ async def choose_recipient(callback: CallbackQuery, state: FSMContext):
         await state.clear()
         return await callback.message.edit_text(t(language, "no_username"))
 
-    await state.update_data(recipient=username)
+    await state.update_data(recipient=username, recipient_from="self")
     await state.set_state(None)
     await show_amount_choice(callback.message, state, language, edit=True)
 
@@ -390,9 +390,24 @@ async def set_friend_username(message: Message, state: FSMContext):
     if not match:
         return await message.answer(t(language, "bad_username"))
 
-    await state.update_data(recipient=match.group(1))
+    await state.update_data(recipient=match.group(1), recipient_from="friend")
     await state.set_state(None)
     await show_amount_choice(message, state, language, edit=False)
+
+
+async def premium_refusal(language: str, recipient: str) -> str | None:
+    """Текст отказа, если этому получателю Premium подарить нельзя, иначе None.
+
+    Выдача упёрлась бы в тот же отказ уже после оплаты, поэтому спрашиваем заранее — брать
+    деньги за то, что невозможно выдать, нельзя.
+    """
+    problem = await check_recipient(recipient, "premium")
+    if not problem:
+        return None
+
+    key = {"already_premium": "premium_already",
+           "not_a_user": "premium_recipient_not_user"}.get(problem, "premium_recipient_unknown")
+    return t(language, key, recipient=recipient)
 
 
 async def show_amount_choice(message: Message, state: FSMContext, language: str, edit: bool):
@@ -402,16 +417,13 @@ async def show_amount_choice(message: Message, state: FSMContext, language: str,
     send = message.edit_text if edit else message.answer
 
     if product == "premium":
-        # Fragment откажет уже после оплаты, если у получателя есть подписка, поэтому
-        # спрашиваем его заранее — деньги за то, что нельзя выдать, брать нельзя.
-        recipient = data.get("recipient", "")
-        problem = await check_recipient(recipient, "premium")
-        if problem:
-            await state.clear()
-            key = {"already_premium": "premium_already",
-                   "not_a_user": "premium_recipient_not_user"}.get(
-                       problem, "premium_recipient_unknown")
-            return await send(t(language, key, recipient=recipient), parse_mode="HTML")
+        # Чужой username проверяем сразу: опечатку разумнее показать здесь, а не после
+        # выбора срока. Свой аккаунт проверяется позже, в choose_months.
+        if data.get("recipient_from") == "friend":
+            refusal = await premium_refusal(language, data.get("recipient", ""))
+            if refusal:
+                await state.clear()
+                return await send(refusal, parse_mode="HTML")
 
         text, keyboard = t(language, "choose_months"), months_keyboard(language)
     else:
@@ -424,6 +436,14 @@ async def show_amount_choice(message: Message, state: FSMContext, language: str,
 async def choose_months(callback: CallbackQuery, state: FSMContext):
     language = await language_of(callback.from_user.id)
     await callback.answer()
+
+    data = await state.get_data()
+    if data.get("recipient_from") == "self":
+        refusal = await premium_refusal(language, data.get("recipient", ""))
+        if refusal:
+            await state.clear()
+            return await callback.message.edit_text(refusal, parse_mode="HTML")
+
     await create_order_message(callback.message, callback.from_user.id, state,
                                int(callback.data.split(":", 1)[1]), language)
 
