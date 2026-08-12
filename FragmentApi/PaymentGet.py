@@ -23,8 +23,13 @@ class RecipientError(FragmentApiError):
 
 
 # Fragment отвечает по-английски; ловим по подстроке, а не на равенство, потому что текст
-# он поправляет время от времени.
-ALREADY_PREMIUM = "already subscribed to telegram premium"
+# он поправляет время от времени. Каждой причине — свой код, чтобы бот подсказал по делу.
+RECIPIENT_ERRORS = (
+    ("already subscribed to telegram premium", "already_premium"),
+    # username канала или бота: "Please enter a username assigned to a user."
+    ("username assigned to a user", "not_a_user"),
+    ("no telegram users found", "not_found"),
+)
 
 
 # Fragment drives stars and Premium gifts through the same three-step flow, only the method
@@ -188,9 +193,13 @@ class PaymentGet:
 
         error = data.get("error")
         if error:
-            if ALREADY_PREMIUM in error.lower():
-                raise RecipientError("already_premium")
-            raise RecipientError(error)
+            lowered = error.lower()
+            code = next((code for marker, code in RECIPIENT_ERRORS if marker in lowered), None)
+            # Незнакомую формулировку не глотаем: пусть всплывёт как обычная ошибка Fragment,
+            # иначе новая причина отказа будет годами показываться как "аккаунт не найден".
+            if code is None:
+                raise FragmentApiError(f"{api['search']}: {error}")
+            raise RecipientError(code)
 
         if not data.get("found", {}).get("recipient"):
             raise RecipientError("not_found")

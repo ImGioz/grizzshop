@@ -408,8 +408,9 @@ async def show_amount_choice(message: Message, state: FSMContext, language: str,
         problem = await check_recipient(recipient, "premium")
         if problem:
             await state.clear()
-            key = ("premium_already" if problem == "already_premium"
-                   else "premium_recipient_unknown")
+            key = {"already_premium": "premium_already",
+                   "not_a_user": "premium_recipient_not_user"}.get(
+                       problem, "premium_recipient_unknown")
             return await send(t(language, key, recipient=recipient), parse_mode="HTML")
 
         text, keyboard = t(language, "choose_months"), months_keyboard(language)
