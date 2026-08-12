@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from FragmentApi.PaymentGet import FragmentApiError, PaymentGet
+from FragmentApi.PaymentGet import FragmentApiError, PaymentGet, RecipientError
 from main import load_mnemonics
 from wallet.Transactions import Transactions
 
@@ -51,6 +51,28 @@ async def deliver_gram(wallet_address: str, nanotons: int) -> int:
         raise DeliveryError(f"транзакция не прошла: {error}") from error
 
     return nanotons
+
+
+async def check_recipient(recipient: str, product: str = "premium", quantity="") -> str | None:
+    """Проверить получателя до создания заказа.
+
+    Возвращает None, если дарить можно, иначе — короткий код причины ("already_premium",
+    "not_found"). Проверка необязательная: если Fragment недоступен или куки протухли,
+    возвращает None и покупка идёт как раньше — лучше пропустить проверку, чем не дать купить.
+    """
+    from shop import runtime
+
+    if runtime.test_mode():
+        return None
+
+    try:
+        await asyncio.to_thread(PaymentGet().check_recipient, recipient, product, quantity)
+    except RecipientError as error:
+        return str(error)
+    except Exception as error:
+        logger.warning("проверка получателя @%s не удалась, пропускаю: %s", recipient, error)
+        return None
+    return None
 
 
 async def deliver_stars(recipient: str, quantity: int, product: str = "stars") -> int:

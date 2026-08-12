@@ -71,6 +71,12 @@ TEXTS = {
 
         "stars_for_whom": "Кому купуємо зірки?",
         "premium_for_whom": "Кому купуємо Telegram Premium?",
+        "premium_already": "❌ У <b>@{recipient}</b> вже активний Telegram Premium.\n\n"
+                            "Fragment не дозволяє подарувати підписку тому, хто вже її має — "
+                            "спочатку дочекайтесь її завершення.\n\n"
+                            "Можете вказати іншого отримувача або обрати інший товар.",
+        "premium_recipient_unknown": "❌ Fragment не знайшов акаунт <b>@{recipient}</b>.\n\n"
+                            "Перевірте username і спробуйте ще раз.",
         "gram_ask_wallet": "Надішліть адресу гаманця <b>у мережі TON</b>, на яку надіслати монети.\n\nНаприклад: <code>UQ...</code> або <code>EQ...</code>",
         "gram_bad_wallet": "Це не схоже на адресу TON. Перевірте та надішліть ще раз.",
         "gram_ask_amount": "Гаманець: <code>{wallet}</code>\n\nСкільки TON купуєте? Введіть число, мінімум {min_ton}.\nКурс: {rate} грн за 1 TON.",
@@ -262,6 +268,12 @@ TEXTS = {
 
         "stars_for_whom": "Кому покупаем звёзды?",
         "premium_for_whom": "Кому покупаем Telegram Premium?",
+        "premium_already": "❌ У <b>@{recipient}</b> уже активен Telegram Premium.\n\n"
+                            "Fragment не даёт подарить подписку тому, у кого она уже есть — "
+                            "сначала дождитесь её окончания.\n\n"
+                            "Можете указать другого получателя или выбрать другой товар.",
+        "premium_recipient_unknown": "❌ Fragment не нашёл аккаунт <b>@{recipient}</b>.\n\n"
+                            "Проверьте username и попробуйте ещё раз.",
         "gram_ask_wallet": "Пришлите адрес кошелька <b>в сети TON</b>, на который отправить монеты.\n\nНапример: <code>UQ...</code> или <code>EQ...</code>",
         "gram_bad_wallet": "Это не похоже на адрес TON. Проверьте и пришлите ещё раз.",
         "gram_ask_amount": "Кошелёк: <code>{wallet}</code>\n\nСколько TON покупаете? Введите число, минимум {min_ton}.\nКурс: {rate} грн за 1 TON.",

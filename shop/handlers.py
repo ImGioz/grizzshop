@@ -21,7 +21,8 @@ from shop import price_cache
 from shop import reviews
 from shop import runtime
 from shop.config import ADMIN_IDS, CHANNEL_ID, MIN_STARS
-from shop.delivery import DeliveryError, deliver_gram, deliver_stars, parse_ton_address
+from shop.delivery import (DeliveryError, check_recipient, deliver_gram, deliver_stars,
+                           parse_ton_address)
 from shop.keyboards import (calculator_again_keyboard, calculator_keyboard,
                             check_payment_keyboard, crypto_check_keyboard,
                             language_keyboard, main_menu,
@@ -396,13 +397,25 @@ async def set_friend_username(message: Message, state: FSMContext):
 
 async def show_amount_choice(message: Message, state: FSMContext, language: str, edit: bool):
     """Stars pick a quantity, Premium picks a subscription length."""
-    product = (await state.get_data()).get("product", "stars")
+    data = await state.get_data()
+    product = data.get("product", "stars")
+    send = message.edit_text if edit else message.answer
+
     if product == "premium":
+        # Fragment откажет уже после оплаты, если у получателя есть подписка, поэтому
+        # спрашиваем его заранее — деньги за то, что нельзя выдать, брать нельзя.
+        recipient = data.get("recipient", "")
+        problem = await check_recipient(recipient, "premium")
+        if problem:
+            await state.clear()
+            key = ("premium_already" if problem == "already_premium"
+                   else "premium_recipient_unknown")
+            return await send(t(language, key, recipient=recipient), parse_mode="HTML")
+
         text, keyboard = t(language, "choose_months"), months_keyboard(language)
     else:
         text, keyboard = t(language, "choose_quantity"), quantity_keyboard(language)
 
-    send = message.edit_text if edit else message.answer
     await send(text, reply_markup=keyboard)
 
 

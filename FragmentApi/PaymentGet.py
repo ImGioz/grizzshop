@@ -14,6 +14,19 @@ class FragmentApiError(Exception):
     pass
 
 
+class RecipientError(FragmentApiError):
+    """Fragment отказывается от получателя: нет такого аккаунта или дарить ему нечего.
+
+    Отдельный класс, потому что это не поломка магазина, а нормальный ответ, о котором надо
+    сказать клиенту человеческими словами — в отличие от протухших кук.
+    """
+
+
+# Fragment отвечает по-английски; ловим по подстроке, а не на равенство, потому что текст
+# он поправляет время от времени.
+ALREADY_PREMIUM = "already subscribed to telegram premium"
+
+
 # Fragment drives stars and Premium gifts through the same three-step flow, only the method
 # names and the quantity field differ (confirmed against fragment.com/js/auction.js).
 PRODUCTS = {
@@ -152,6 +165,37 @@ class PaymentGet:
             raise FragmentApiError(f"{step}: {data['error']}. Cookies in cookies.json are probably expired, "
                                    f"re-export them from fragment.com")
         return data
+
+    def check_recipient(self, recipient, product="premium", quantity=""):
+        """Спросить Fragment, можно ли вообще дарить этому получателю.
+
+        Тот же поиск, что и в начале покупки, но без оплаты — чтобы отказ («у него уже есть
+        Premium», «нет такого аккаунта») всплыл до создания заказа, а не после оплаты.
+        """
+        api = PRODUCTS.get(product)
+        if api is None:
+            raise FragmentApiError(f"unknown product {product!r}")
+
+        url = self._update_url()
+        response = requests.post(
+            url, headers=self.headers, cookies=self.cookies,
+            data=f"query={recipient}&{api['amount_field']}={quantity}&method={api['search']}")
+
+        try:
+            data = response.json()
+        except ValueError as error:
+            raise FragmentApiError(f"{api['search']}: Fragment вернул не JSON: {error}") from error
+
+        error = data.get("error")
+        if error:
+            if ALREADY_PREMIUM in error.lower():
+                raise RecipientError("already_premium")
+            raise RecipientError(error)
+
+        if not data.get("found", {}).get("recipient"):
+            raise RecipientError("not_found")
+
+        logging.info("recipient @%s ok for %s", recipient, product)
 
     def get_data_for_payment(self, recipient, quantity, mnemonics, product="stars"):
         """Prepare a Fragment purchase. `quantity` is stars, or months for Premium."""
