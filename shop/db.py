@@ -387,6 +387,24 @@ async def has_review(order_id: int) -> bool:
         return await cursor.fetchone() is not None
 
 
+async def pending_review(user_id: int, since: str) -> Order | None:
+    """Выданный заказ этого клиента, за который он ещё не поставил оценку.
+
+    `since` отсекает заказы, оформленные до включения обязательных отзывов: иначе требование
+    задним числом заперло бы всех старых клиентов на заказах, о которых их никто не спрашивал.
+
+    Берётся самый старый из подходящих: если неоценённых накопилось несколько, разбираем их
+    по очереди, а не показываем последний и не теряем остальные.
+    """
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "SELECT o.* FROM orders o LEFT JOIN reviews r ON r.order_id = o.id "
+            "WHERE o.user_id = ? AND o.status = 'delivered' AND r.id IS NULL "
+            "AND o.created_at >= ? ORDER BY o.id LIMIT 1", (user_id, since))
+        row = await cursor.fetchone()
+        return Order.from_row(row) if row else None
+
+
 async def review_stats(since: datetime | None = None) -> tuple[int, float]:
     query = "SELECT COUNT(*) AS n, COALESCE(AVG(rating), 0) AS avg_rating FROM reviews"
     values = ()

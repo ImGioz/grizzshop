@@ -16,6 +16,8 @@ KEY_AUTO_DELIVERY = "auto_delivery"
 KEY_PDF_AUTO_LIMIT = "pdf_auto_limit"
 KEY_TEST_MODE = "test_mode"
 KEY_NFT_MARKUP = "nft_markup"
+# Момент включения обязательных отзывов; заказы старше него ничего не требуют.
+KEY_REVIEW_SINCE = "review_required_since"
 
 _overrides: dict[str, str] = {}
 

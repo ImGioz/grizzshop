@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 from aiogram import Bot, F, Router
@@ -133,6 +134,10 @@ async def start(message: Message, state: FSMContext):
     if not language:
         return await message.answer(t(DEFAULT_LANGUAGE, "choose_language"), reply_markup=language_keyboard())
 
+    # /start иначе был бы обходом обязательной оценки: очистил состояние — и снова в меню.
+    if await review_debt(message, state, language):
+        return
+
     await enter_shop(message, message.from_user.id, language)
 
 
@@ -179,7 +184,41 @@ async def check_subscription(callback: CallbackQuery, bot: Bot):
 
 # --------------------------------------------------------------------------- gate for everything else
 
-async def require_access(message: Message, bot: Bot) -> str | None:
+async def review_cutoff() -> str:
+    """С какого момента отзыв обязателен. Проставляется один раз, при первом обращении.
+
+    Без отсечки требование распространилось бы на все прошлые выданные заказы разом, и
+    клиенты, купившие месяц назад, упёрлись бы в оценку вместо меню.
+    """
+    settings = await db.get_settings()
+    since = settings.get(runtime.KEY_REVIEW_SINCE)
+    if not since:
+        since = datetime.now(timezone.utc).isoformat()
+        await db.set_setting(runtime.KEY_REVIEW_SINCE, since)
+        runtime.apply(await db.get_settings())
+        logger.info("обязательные отзывы включены с %s", since)
+    return since
+
+
+async def review_debt(message: Message, state: FSMContext, language: str) -> bool:
+    """Есть ли неоценённый заказ. Если есть — снова просит оценку и возвращает True.
+
+    Пока клиент в середине отзыва (пишет комментарий или шлёт фото), не мешаем: оценку он
+    уже поставил, а эти шаги необязательные.
+    """
+    if await state.get_state() in (Review.comment.state, Review.photo.state):
+        return False
+
+    order = await db.pending_review(message.from_user.id, await review_cutoff())
+    if not order:
+        return False
+
+    await message.answer(t(language, "review_required"), parse_mode="HTML")
+    await ask_for_review(message, state, order, language)
+    return True
+
+
+async def require_access(message: Message, bot: Bot, state: FSMContext | None = None) -> str | None:
     """Return the language when the user may proceed, otherwise re-show the gate and return None."""
     language = await db.get_language(message.from_user.id)
     if not language:
@@ -193,6 +232,9 @@ async def require_access(message: Message, bot: Bot) -> str | None:
     if not subscribed:
         await db.set_subscribed(message.from_user.id, False)
         await send_subscription_gate(message, language)
+        return None
+
+    if state is not None and await review_debt(message, state, language):
         return None
 
     return language
@@ -209,7 +251,7 @@ async def cancel(message: Message, state: FSMContext):
 
 @router.message(F.text.in_({t("uk", "menu_stars"), t("ru", "menu_stars")}))
 async def menu_stars(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot)
+    language = await require_access(message, bot, state)
     if not language:
         return
     await state.clear()
@@ -219,7 +261,7 @@ async def menu_stars(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(F.text.in_({t("uk", "menu_premium"), t("ru", "menu_premium")}))
 async def menu_premium(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot)
+    language = await require_access(message, bot, state)
     if not language:
         return
     if not PREMIUM_ENABLED:
@@ -232,7 +274,7 @@ async def menu_premium(message: Message, state: FSMContext, bot: Bot):
 
 @router.message(F.text.in_({t("uk", "menu_gram"), t("ru", "menu_gram")}))
 async def menu_gram(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot)
+    language = await require_access(message, bot, state)
     if not language:
         return
     if not GRAM_ENABLED:
@@ -274,7 +316,7 @@ async def set_gram_amount(message: Message, state: FSMContext):
 
 @router.message(F.text.in_({t("uk", "menu_calculator"), t("ru", "menu_calculator")}))
 async def menu_calculator(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot)
+    language = await require_access(message, bot, state)
     if not language:
         return
     await state.clear()
@@ -349,8 +391,8 @@ async def calculate_to_stars(message: Message, state: FSMContext):
 
 
 @router.message(F.text.in_({t("uk", "menu_profile"), t("ru", "menu_profile")}))
-async def menu_profile(message: Message, bot: Bot):
-    language = await require_access(message, bot)
+async def menu_profile(message: Message, state: FSMContext, bot: Bot):
+    language = await require_access(message, bot, state)
     if not language:
         return
 
@@ -933,7 +975,7 @@ async def business_connected(connection, bot: Bot):
 
 @router.message(F.text.in_({t("uk", "menu_nft"), t("ru", "menu_nft")}))
 async def menu_nft(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot)
+    language = await require_access(message, bot, state)
     if not language:
         return
     await state.clear()
