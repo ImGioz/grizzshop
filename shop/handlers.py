@@ -147,6 +147,22 @@ def payment_ok_text(language: str, product: str) -> str:
     return t(language, f"payment_ok{suffix}")
 
 
+ADMIN_LANGUAGE = "ru"   # уведомления админам, как и панель, только на русском
+
+
+def order_line(order) -> str:
+    """«Что → кому» одной строкой для уведомлений админам.
+
+    Раньше в такие сообщения подставлялись order.quantity и order.recipient напрямую, и заказ
+    на TON выглядел как «3200000000 ⭐ для @UQAf4jgnkB3iRLdr…»: в quantity у него нанотоны,
+    а в recipient — адрес кошелька, а не человек.
+    """
+    what = product_label(ADMIN_LANGUAGE, order.product, order.quantity, order.details)
+    target = ((order.wallet_address or order.recipient) if order.product == "gram"
+              else f"@{order.recipient}")
+    return f"{what} → {target}"
+
+
 async def notify_admins(bot: Bot, text: str):
     for admin_id in runtime.admin_ids():
         try:
@@ -751,12 +767,12 @@ async def set_receipt_pdf(message: Message, state: FSMContext, bot: Bot):
         await status.edit_text(t(language, "order_on_review", limit=runtime.pdf_auto_limit()))
         return await notify_admins(bot, f"🔍 Заказ <code>{order.id}</code> оплачен по PDF на "
                                         f"{order.price} грн — нужна проверка.\n"
-                                        f"{order.quantity} ⭐ → @{order.recipient}\n"
+                                        f"{order_line(order)}\n"
                                         f"Откройте /adminka → Заказы → На проверке.")
 
     await status.edit_text(payment_ok_text(language, order.product))
-    await notify_admins(bot, f"💰 Заказ <code>{order.id}</code> оплачен по PDF: {order.quantity} ⭐ "
-                             f"для @{order.recipient}, {order.price} грн")
+    await notify_admins(bot, f"💰 Заказ <code>{order.id}</code> оплачен по PDF: "
+                             f"{order_line(order)}, {order.price} грн")
     await fulfil_order(message, bot, order, language, state)
 
 
@@ -795,19 +811,19 @@ async def set_receipt_link(message: Message, state: FSMContext, bot: Bot):
 
     await state.clear()
     await status.edit_text(payment_ok_text(language, order.product))
-    await notify_admins(bot, f"💰 Заказ <code>{order.id}</code> оплачен: {order.quantity} ⭐ "
-                             f"для @{order.recipient}, {order.price} грн")
+    await notify_admins(bot, f"💰 Заказ <code>{order.id}</code> оплачен: "
+                             f"{order_line(order)}, {order.price} грн")
 
     await fulfil_order(message, bot, order, language, state)
 
 
 async def fulfil_order(message: Message, bot: Bot, order, language: str, state: FSMContext):
     what = product_label(language, order.product, order.quantity, order.details)
-    target = order.wallet_address if order.product == "gram" else f"@{order.recipient}"
+    summary = order_line(order)
 
     if not runtime.auto_delivery():  # toggled live from the admin panel
         await notify_admins(bot, f"⚠️ Ручная выдача: заказ <code>{order.id}</code>, "
-                                 f"{what} → {target}")
+                                 f"{summary}")
         return await message.answer(t(language, "delivery_failed"))
 
     if order.product == "test":
@@ -854,7 +870,7 @@ async def fulfil_order(message: Message, bot: Bot, order, language: str, state: 
         logger.error("delivery failed for order %s: %s", order.id, error)
         await db.update_order(order.id, status="failed")
         await notify_admins(bot, f"❌ Заказ <code>{order.id}</code> оплачен, но выдача упала: {error}\n"
-                                 f"Нужна ручная выдача: {what} → {target}")
+                                 f"Нужна ручная выдача: {summary}")
         return await message.answer(t(language, "delivery_failed"))
 
     # record what the delivery actually cost, so the margin can be reported later
