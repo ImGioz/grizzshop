@@ -197,16 +197,23 @@ def order_card_keyboard(order) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def order_card_text(order) -> str:
-    receiver = (f"Кошелёк: <code>{order.wallet_address}</code>" if order.product == "gram"
-                else f"Получатель: @{order.recipient}")
+async def order_card_text(order) -> str:
+    receiver = (f"Кошелёк: <code>{order.wallet_address or order.recipient}</code>"
+                if order.product == "gram" else f"Получатель: @{order.recipient}")
+
+    # У заказа на TON получателем записан адрес кошелька, а не человек, поэтому имя
+    # покупателя берём из профиля — иначе по такому заказу видно только числовой id.
+    user = await db.get_user(order.user_id)
+    username = user["username"] if user else None
+    buyer = f"@{username} · <code>{order.user_id}</code>" if username else f"<code>{order.user_id}</code>"
+
     lines = [
         f"<b>Заказ #{order.id}</b>",
         f"Статус: {STATUS_LABELS.get(order.status, order.status)}",
         f"Товар: {order_product(order)}",
         receiver,
         f"Сумма: {order.price} грн",
-        f"Покупатель: <code>{order.user_id}</code>",
+        f"Покупатель: {buyer}",
         f"Создан: {localtime.stamp(order.created_at)}",
     ]
     if order.sender_name:
@@ -223,7 +230,7 @@ async def order_card(callback: CallbackQuery):
     order = await db.get_order(int(callback.data.split(":")[-1]))
     if not order:
         return await callback.answer("Заказ не найден", show_alert=True)
-    await render(callback, order_card_text(order), order_card_keyboard(order))
+    await render(callback, await order_card_text(order), order_card_keyboard(order))
 
 
 @router.callback_query(F.data.startswith("adm:orders:deliver:"))
@@ -235,7 +242,7 @@ async def deliver_order(callback: CallbackQuery, bot: Bot):
         return await callback.answer(f"Статус {order.status}, выдача не требуется", show_alert=True)
 
     await callback.answer("Выдаю...")
-    await callback.message.edit_text(f"{order_card_text(order)}\n\n⏳ Выдаю {order_product(order)}...",
+    await callback.message.edit_text(f"{await order_card_text(order)}\n\n⏳ Выдаю {order_product(order)}...",
                                      parse_mode="HTML")
 
     try:
@@ -247,13 +254,13 @@ async def deliver_order(callback: CallbackQuery, bot: Bot):
         await db.update_order(order.id, status="failed")
         failed = await db.get_order(order.id)
         return await callback.message.edit_text(
-            f"{order_card_text(failed)}\n\n❌ Не удалось: {error}",
+            f"{await order_card_text(failed)}\n\n❌ Не удалось: {error}",
             parse_mode="HTML", reply_markup=order_card_keyboard(failed))
 
     from shop.handlers import cost_in_uah
     await db.update_order(order.id, status="delivered", cost_uah=str(await cost_in_uah(spent)))
     delivered = await db.get_order(order.id)
-    await callback.message.edit_text(f"{order_card_text(delivered)}\n\n✅ Выдано.",
+    await callback.message.edit_text(f"{await order_card_text(delivered)}\n\n✅ Выдано.",
                                      parse_mode="HTML", reply_markup=order_card_keyboard(delivered))
 
     try:
@@ -269,7 +276,7 @@ async def mark_delivered(callback: CallbackQuery):
     await db.update_order(order_id, status="delivered")
     order = await db.get_order(order_id)
     await callback.answer("Отмечен выданным")
-    await render(callback, order_card_text(order), order_card_keyboard(order))
+    await render(callback, await order_card_text(order), order_card_keyboard(order))
 
 
 @router.callback_query(F.data.startswith("adm:orders:cancel:"))
@@ -278,7 +285,7 @@ async def cancel_order(callback: CallbackQuery):
     await db.update_order(order_id, status="expired")
     order = await db.get_order(order_id)
     await callback.answer("Заказ отменён")
-    await render(callback, order_card_text(order), order_card_keyboard(order))
+    await render(callback, await order_card_text(order), order_card_keyboard(order))
 
 
 # --------------------------------------------------------------------------- wallet
@@ -759,7 +766,7 @@ async def reject_order(callback: CallbackQuery, bot: Bot):
     await db.update_order(order.id, status="failed")
     rejected = await db.get_order(order.id)
     await callback.answer("Отклонено")
-    await render(callback, f"{order_card_text(rejected)}\n\n❌ Отклонено администратором.",
+    await render(callback, f"{await order_card_text(rejected)}\n\n❌ Отклонено администратором.",
                  order_card_keyboard(rejected))
 
     try:
