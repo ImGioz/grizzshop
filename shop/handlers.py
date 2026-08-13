@@ -176,7 +176,7 @@ async def notify_admins(bot: Bot, text: str):
 # --------------------------------------------------------------------------- onboarding
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext, command: CommandObject):
+async def start(message: Message, state: FSMContext, command: CommandObject, bot: Bot):
     await state.clear()
 
     # Приглашающего засчитываем только новичку: иначе постоянный клиент, перейдя по ссылке
@@ -184,7 +184,9 @@ async def start(message: Message, state: FSMContext, command: CommandObject):
     is_new = await db.get_user(message.from_user.id) is None
     await db.upsert_user(message.from_user.id, message.from_user.username)
     if is_new and command.args:
-        await referrals.attach(message.from_user.id, command.args)
+        referrer_id = await referrals.attach(message.from_user.id, command.args)
+        if referrer_id:
+            await notify_referral_joined(bot, referrer_id, message.from_user)
 
     language = await db.get_language(message.from_user.id)
     if not language:
@@ -528,31 +530,57 @@ async def claim_referral_stars(callback: CallbackQuery, bot: Bot):
                              f"(приглашено с заказами: {state['qualified']})")
 
 
-async def reward_referrer(bot: Bot, order) -> None:
-    """Сообщить пригласившему, что очередная десятка закрыта.
+async def tell_referrer(bot: Bot, referrer_id: int, key: str, **values) -> None:
+    """Написать пригласившему на его языке. Он мог заблокировать бота — это не наша беда."""
+    try:
+        await bot.send_message(referrer_id, t(await language_of(referrer_id), key, **values),
+                               parse_mode="HTML")
+    except Exception:
+        logger.warning("не удалось написать пригласившему %s (%s)", referrer_id, key)
 
-    Вызывается на каждой оплате, поэтому сначала проверяем, что этот заказ у покупателя
-    первый успешный: приглашение засчитывается один раз, сколько бы он потом ни покупал.
-    """
-    user = await db.get_user(order.user_id)
-    referrer_id = user["referrer_id"] if user else None
+
+def who_is(user, fallback_id: int) -> str:
+    """Как назвать реферала в сообщении: @username, а без него — просто id."""
+    username = user["username"] if user else None
+    return f"@{username}" if username else f"ID {fallback_id}"
+
+
+async def referrer_of(user_id: int) -> int | None:
+    user = await db.get_user(user_id)
+    return user["referrer_id"] if user else None
+
+
+async def notify_referral_joined(bot: Bot, referrer_id: int, new_user) -> None:
+    await tell_referrer(bot, referrer_id, "referral_joined_notice",
+                        who=f"@{new_user.username}" if new_user.username else f"ID {new_user.id}")
+
+
+async def reward_referrer(bot: Bot, order) -> None:
+    """Рассказать пригласившему о покупке его реферала и, если закрылась десятка, о бонусе."""
+    referrer_id = await referrer_of(order.user_id)
     if not referrer_id:
         return
 
+    buyer = await db.get_user(order.user_id)
+    state = await referrals.status(referrer_id)
+
+    await tell_referrer(bot, referrer_id, "referral_purchase",
+                        who=who_is(buyer, order.user_id),
+                        product=product_label(await language_of(referrer_id), order.product,
+                                              order.quantity, order.details),
+                        qualified=state["qualified"],
+                        stars=referrals.STARS_PER_REWARD,
+                        to_next=state["to_next"])
+
+    # Бонус — только когда этот заказ у покупателя первый успешный: приглашение засчитывается
+    # один раз, сколько бы он потом ни покупал.
     if await db.successful_order_count(order.user_id) != 1:
         return
-
-    state = await referrals.status(referrer_id)
     if state["qualified"] % referrals.REFERRALS_PER_REWARD:
         return
 
-    language = await language_of(referrer_id)
-    try:
-        await bot.send_message(referrer_id,
-                               t(language, "referral_reward", qualified=state["qualified"],
-                                 stars=referrals.STARS_PER_REWARD), parse_mode="HTML")
-    except Exception:
-        logger.exception("не удалось сообщить о бонусе пригласившему %s", referrer_id)
+    await tell_referrer(bot, referrer_id, "referral_reward",
+                        qualified=state["qualified"], stars=referrals.STARS_PER_REWARD)
 
 
 # --------------------------------------------------------------------------- buying stars
