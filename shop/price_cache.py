@@ -115,9 +115,9 @@ async def portals_floor(collection: str | None, model: str | None,
     return listing.price
 
 
-async def floor_ton(collection: str | None, model: str | None,
-                    refresh: bool = False) -> Decimal | None:
-    """Лучшая цена подарка по обоим маркетам.
+async def floors(collection: str | None, model: str | None,
+                 refresh: bool = False) -> dict[str, Decimal | None]:
+    """Цены обоих маркетов и лучшая из них: {"tonnel", "portals", "best"}.
 
     Берём минимум, а не один «основной» источник: подарок продаётся и там, и там, и клиент
     сравнивает нашу цену с самым дешёвым предложением, которое видит. Один и тот же Candy Cane
@@ -127,12 +127,16 @@ async def floor_ton(collection: str | None, model: str | None,
     portals = await portals_floor(collection, model, refresh=refresh)
 
     prices = [price for price in (tonnel, portals) if price]
-    if not prices:
-        return None
+    best = min(prices) if prices else None
 
-    logger.info("floor %s/%s: tonnel=%s portals=%s -> %s",
-                collection, model, tonnel, portals, min(prices))
-    return min(prices)
+    logger.info("floor %s/%s: tonnel=%s portals=%s -> %s", collection, model, tonnel, portals, best)
+    return {"tonnel": tonnel, "portals": portals, "best": best}
+
+
+async def floor_ton(collection: str | None, model: str | None,
+                    refresh: bool = False) -> Decimal | None:
+    """Лучшая цена подарка по обоим маркетам."""
+    return (await floors(collection, model, refresh=refresh))["best"]
 
 
 async def warm(gifts, delay: float = 0.5) -> int:

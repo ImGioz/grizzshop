@@ -75,11 +75,43 @@ def nft_price(floor_ton: Decimal, rate: Decimal | None = None) -> Decimal:
     return total.quantize(Decimal("1"), rounding=ROUND_CEILING)
 
 
-def _stock_payload(gift) -> dict:
-    """What the confirmation card and the order need; the gift itself is re-read before transfer."""
+def _stock_payload(gift, rate: Decimal, markup: Decimal) -> dict:
+    """What the confirmation card and the order need; the gift itself is re-read before transfer.
+
+    Курс и наценка сохраняются вместе с ценой: админскую формулу надо показывать ровно с теми
+    числами, по которым цена посчитана, а не с пересчитанными на момент открытия карточки.
+    """
     return {"price": str(gift.price_uah), "details": gift.details, "link": gift.link,
             "collection": gift.title, "model": gift.model or "—",
-            "symbol": gift.symbol or "—", "backdrop": gift.backdrop or "—"}
+            "symbol": gift.symbol or "—", "backdrop": gift.backdrop or "—",
+            "base_collection": gift.collection,
+            "floor": str(gift.floor_ton) if gift.floor_ton else "",
+            "rate": str(rate), "markup": str(markup)}
+
+
+async def admin_price_note(user_id: int, floor_ton, rate, markup, price,
+                           collection: str | None = None, model: str | None = None) -> str:
+    """Разбор цены — только администратору. Обычный клиент получает пустую строку.
+
+    Текст намеренно живёт здесь, а не в texts.py: это служебная врезка для своих, её не
+    переводят и не показывают покупателям.
+    """
+    if not runtime.is_admin(user_id) or not floor_ton:
+        return ""
+
+    sources = ""
+    if collection:
+        data = await price_cache.floors(collection, model)
+        sources = "  ·  ".join(f"{name} {value}" if value else f"{name} —"
+                               for name, value in (("Tonnel", data["tonnel"]),
+                                                   ("Portals", data["portals"])))
+        sources = f"\nМаркеты: {sources}"
+
+    multiplier = 1 + Decimal(markup) / 100
+    return (f"\n\n➖➖➖➖➖\n🔧 <b>Видно только админам</b>"
+            f"\nФлор: <b>{floor_ton}</b> TON{sources}"
+            f"\nКурс: {rate} грн  ·  наценка: {markup}%"
+            f"\n<code>{floor_ton} × {rate} × {multiplier} = {price} грн</code>")
 
 
 async def cost_in_uah(nanotons: int) -> Decimal:
@@ -1006,7 +1038,9 @@ async def nft_from_list(callback: CallbackQuery, state: FSMContext, bot: Bot):
     if not priced:
         return await callback.message.answer(t(language, "nft_stock_empty"))
 
-    await state.update_data(stock={g.owned_gift_id: _stock_payload(g) for g in priced})
+    markup = runtime.nft_markup_percent()
+    await state.update_data(stock={g.owned_gift_id: _stock_payload(g, market, markup)
+                                   for g in priced})
     await callback.message.edit_text(t(language, "nft_stock_title"), parse_mode="HTML",
                                      reply_markup=stock_keyboard(priced))
 
@@ -1021,10 +1055,13 @@ async def nft_take_from_stock(callback: CallbackQuery, state: FSMContext):
         return await callback.answer(t(language, "nft_stock_gone"), show_alert=True)
 
     await callback.answer()
+    note = await admin_price_note(callback.from_user.id, payload.get("floor"),
+                                  payload.get("rate"), payload.get("markup"), payload["price"],
+                                  payload.get("base_collection"), payload.get("model"))
     await callback.message.edit_text(
         t(language, "nft_stock_card", collection=payload["collection"], model=payload["model"],
           symbol=payload["symbol"], backdrop=payload["backdrop"], link=payload["link"],
-          price=payload["price"]),
+          price=payload["price"]) + note,
         parse_mode="HTML", disable_web_page_preview=False,
         reply_markup=nft_buy_keyboard(language, chosen))
 
@@ -1109,10 +1146,16 @@ async def nft_search(message: Message, state: FSMContext):
         header = t(language, "nft_header_similar", model=request["model"] or "—",
                    symbol=request["symbol"] or "—", backdrop=request["backdrop"] or "—")
 
+    # На маркете цена считается от конкретного лота, который мы и купим, поэтому разбор без
+    # сравнения маркетов: подменять источник тут нельзя, покупка идёт именно на Portals.
+    rate = await asyncio.to_thread(crypto.market_rate)
+    note = await admin_price_note(message.from_user.id, listing.price, rate,
+                                  runtime.nft_markup_percent(), price)
+
     await status.edit_text(
         header + t(language, "nft_card", collection=listing.name, model=listing.model or "—",
                    symbol=listing.symbol or "—", backdrop=listing.backdrop or "—",
-                   price=price),
+                   price=price) + note,
         parse_mode="HTML", reply_markup=nft_confirm_keyboard(language))
 
 
