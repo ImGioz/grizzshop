@@ -8,7 +8,7 @@ from decimal import Decimal, InvalidOperation, ROUND_CEILING
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command, CommandStart
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
@@ -19,6 +19,7 @@ from shop import db
 from shop import nft_market
 from shop import nft_stock
 from shop import price_cache
+from shop import referrals
 from shop import reviews
 from shop import runtime
 from shop.config import ADMIN_IDS, CHANNEL_ID, MIN_STARS
@@ -174,9 +175,15 @@ async def notify_admins(bot: Bot, text: str):
 # --------------------------------------------------------------------------- onboarding
 
 @router.message(CommandStart())
-async def start(message: Message, state: FSMContext):
+async def start(message: Message, state: FSMContext, command: CommandObject):
     await state.clear()
+
+    # Приглашающего засчитываем только новичку: иначе постоянный клиент, перейдя по ссылке
+    # знакомого, задним числом стал бы чьим-то рефералом.
+    is_new = await db.get_user(message.from_user.id) is None
     await db.upsert_user(message.from_user.id, message.from_user.username)
+    if is_new and command.args:
+        await referrals.attach(message.from_user.id, command.args)
 
     language = await db.get_language(message.from_user.id)
     if not language:
@@ -449,7 +456,97 @@ async def menu_profile(message: Message, state: FSMContext, bot: Bot):
     await message.answer(
         t(language, "profile", user_id=message.from_user.id, username=username,
           language=language, paid_orders=paid_orders, total_stars=total_stars),
-        parse_mode="HTML")
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text=t(language, "menu_referral"), callback_data="ref:show")]]))
+
+
+# --------------------------------------------------------------------------- referrals
+
+async def referral_screen(message: Message, bot: Bot, user_id: int, language: str, edit: bool):
+    state = await referrals.status(user_id)
+    text = t(language, "referral_screen",
+             per_reward=referrals.REFERRALS_PER_REWARD,
+             stars_per_reward=referrals.STARS_PER_REWARD,
+             link=await referrals.link(bot, user_id), **state)
+
+    rows = []
+    if state["available"]:
+        rows.append([InlineKeyboardButton(
+            text=t(language, "referral_claim", available=state["available"]),
+            callback_data="ref:claim")])
+
+    send = message.edit_text if edit else message.answer
+    await send(text, parse_mode="HTML", disable_web_page_preview=True,
+               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+
+
+@router.callback_query(F.data == "ref:show")
+async def show_referrals(callback: CallbackQuery, bot: Bot):
+    language = await language_of(callback.from_user.id)
+    await callback.answer()
+    await referral_screen(callback.message, bot, callback.from_user.id, language, edit=False)
+
+
+@router.callback_query(F.data == "ref:claim")
+async def claim_referral_stars(callback: CallbackQuery, bot: Bot):
+    language = await language_of(callback.from_user.id)
+    state = await referrals.status(callback.from_user.id)
+
+    if not state["available"]:
+        return await callback.answer(t(language, "referral_nothing"), show_alert=True)
+    if not callback.from_user.username:
+        return await callback.answer(t(language, "referral_no_username"), show_alert=True)
+
+    stars = state["available"]
+    await callback.answer()
+    status_message = await callback.message.answer(t(language, "referral_sending", stars=stars))
+
+    # Счётчик выданного двигаем до отправки: иначе двойное нажатие успевало бы уйти в выдачу
+    # дважды, и бонус выдавался бы два раза.
+    await db.add_referral_payout(callback.from_user.id, stars)
+    try:
+        await deliver_stars(callback.from_user.username, stars)
+    except DeliveryError as error:
+        await db.add_referral_payout(callback.from_user.id, -stars)
+        logger.error("реферальная выплата %s звёзд для %s не прошла: %s",
+                     stars, callback.from_user.id, error)
+        await notify_admins(bot, f"❌ Реферальный бонус не выдан: {stars} ⭐ "
+                                 f"для @{callback.from_user.username} "
+                                 f"(<code>{callback.from_user.id}</code>)\n{error}")
+        return await status_message.edit_text(t(language, "referral_claim_failed", error=error))
+
+    await status_message.edit_text(t(language, "referral_claimed", stars=stars), parse_mode="HTML")
+    await notify_admins(bot, f"🤝 Реферальный бонус выдан: {stars} ⭐ → "
+                             f"@{callback.from_user.username} "
+                             f"(приглашено с заказами: {state['qualified']})")
+
+
+async def reward_referrer(bot: Bot, order) -> None:
+    """Сообщить пригласившему, что очередная десятка закрыта.
+
+    Вызывается на каждой оплате, поэтому сначала проверяем, что этот заказ у покупателя
+    первый успешный: приглашение засчитывается один раз, сколько бы он потом ни покупал.
+    """
+    user = await db.get_user(order.user_id)
+    referrer_id = user["referrer_id"] if user else None
+    if not referrer_id:
+        return
+
+    if await db.successful_order_count(order.user_id) != 1:
+        return
+
+    state = await referrals.status(referrer_id)
+    if state["qualified"] % referrals.REFERRALS_PER_REWARD:
+        return
+
+    language = await language_of(referrer_id)
+    try:
+        await bot.send_message(referrer_id,
+                               t(language, "referral_reward", qualified=state["qualified"],
+                                 stars=referrals.STARS_PER_REWARD), parse_mode="HTML")
+    except Exception:
+        logger.exception("не удалось сообщить о бонусе пригласившему %s", referrer_id)
 
 
 # --------------------------------------------------------------------------- buying stars
@@ -820,6 +917,9 @@ async def set_receipt_link(message: Message, state: FSMContext, bot: Bot):
 async def fulfil_order(message: Message, bot: Bot, order, language: str, state: FSMContext):
     what = product_label(language, order.product, order.quantity, order.details)
     summary = order_line(order)
+
+    # Оплата состоялась — самое время засчитать приглашение тому, кто привёл покупателя.
+    await reward_referrer(bot, order)
 
     if not runtime.auto_delivery():  # toggled live from the admin panel
         await notify_admins(bot, f"⚠️ Ручная выдача: заказ <code>{order.id}</code>, "

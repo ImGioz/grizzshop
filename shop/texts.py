@@ -185,6 +185,29 @@ TEXTS = {
         "no_active_order": "Немає активного замовлення.",
         "cancelled": "Скасовано.",
 
+        "menu_referral": "🤝 Реферальна програма",
+        "referral_screen": "<b>🤝 Реферальна програма</b>\n\n"
+                           "За кожні <b>{per_reward}</b> запрошених, які зробили замовлення, "
+                           "ви отримуєте <b>{stars_per_reward} ⭐</b>.\n\n"
+                           "Ваше посилання:\n<code>{link}</code>\n\n"
+                           "Запрошено: <b>{invited}</b>\n"
+                           "З них зробили замовлення: <b>{qualified}</b>\n"
+                           "До наступних {stars_per_reward} ⭐: <b>{to_next}</b>\n\n"
+                           "Нараховано: <b>{earned} ⭐</b>\n"
+                           "Вже отримано: <b>{paid} ⭐</b>\n"
+                           "Доступно зараз: <b>{available} ⭐</b>",
+        "referral_claim": "🎁 Отримати {available} ⭐",
+        "referral_nothing": "Поки немає чого отримувати. Запросіть ще друзів 🙂",
+        "referral_no_username": "Щоб отримати зірки, встановіть username у налаштуваннях Telegram — "
+                                "без нього немає куди їх надіслати.",
+        "referral_sending": "Надсилаю {stars} ⭐...",
+        "referral_claimed": "Готово! <b>{stars} ⭐</b> зараховано на ваш акаунт 🎉",
+        "referral_claim_failed": "Не вдалося видати зірки: {error}\nМенеджер уже знає, зірки не згоріли.",
+        "referral_reward": "🎉 <b>Вітаємо!</b>\n\n"
+                           "Ви запросили вже <b>{qualified}</b> друзів із замовленнями, "
+                           "тому вам нараховано <b>{stars} ⭐</b>.\n\n"
+                           "Заберіть їх у профілі → Реферальна програма.",
+        "referral_joined": "Ви прийшли за запрошенням 🤝",
         "profile": "<b>Ваш профіль</b>\n"
                    "ID: <code>{user_id}</code>\n"
                    "Username: {username}\n"
@@ -388,6 +411,29 @@ TEXTS = {
         "no_active_order": "Нет активного заказа.",
         "cancelled": "Отменено.",
 
+        "menu_referral": "🤝 Реферальная программа",
+        "referral_screen": "<b>🤝 Реферальная программа</b>\n\n"
+                           "За каждые <b>{per_reward}</b> приглашённых, сделавших заказ, "
+                           "вы получаете <b>{stars_per_reward} ⭐</b>.\n\n"
+                           "Ваша ссылка:\n<code>{link}</code>\n\n"
+                           "Приглашено: <b>{invited}</b>\n"
+                           "Из них сделали заказ: <b>{qualified}</b>\n"
+                           "До следующих {stars_per_reward} ⭐: <b>{to_next}</b>\n\n"
+                           "Начислено: <b>{earned} ⭐</b>\n"
+                           "Уже получено: <b>{paid} ⭐</b>\n"
+                           "Доступно сейчас: <b>{available} ⭐</b>",
+        "referral_claim": "🎁 Получить {available} ⭐",
+        "referral_nothing": "Пока нечего получать. Пригласите ещё друзей 🙂",
+        "referral_no_username": "Чтобы получить звёзды, установите username в настройках Telegram — "
+                                "без него их некуда отправить.",
+        "referral_sending": "Отправляю {stars} ⭐...",
+        "referral_claimed": "Готово! <b>{stars} ⭐</b> зачислено на ваш аккаунт 🎉",
+        "referral_claim_failed": "Не удалось выдать звёзды: {error}\nМенеджер уже знает, звёзды не сгорели.",
+        "referral_reward": "🎉 <b>Поздравляем!</b>\n\n"
+                           "Вы пригласили уже <b>{qualified}</b> друзей с заказами, "
+                           "поэтому вам начислено <b>{stars} ⭐</b>.\n\n"
+                           "Заберите их в профиле → Реферальная программа.",
+        "referral_joined": "Вы пришли по приглашению 🤝",
         "profile": "<b>Ваш профиль</b>\n"
                    "ID: <code>{user_id}</code>\n"
                    "Username: {username}\n"

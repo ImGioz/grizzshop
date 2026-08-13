@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS users (
     language    TEXT,
     subscribed  INTEGER NOT NULL DEFAULT 0,
     blocked     INTEGER NOT NULL DEFAULT 0,   -- set when the user blocks the bot during a broadcast
+    referrer_id INTEGER,                      -- кто привёл; ставится один раз, при первом /start
+    referral_stars_paid INTEGER NOT NULL DEFAULT 0,   -- сколько бонусных звёзд уже выдано
     created_at  TEXT NOT NULL
 );
 
@@ -178,6 +180,14 @@ async def init():
         cursor = await connection.execute("PRAGMA table_info(users)")
         if "blocked" not in {row["name"] for row in await cursor.fetchall()}:
             await connection.execute("ALTER TABLE users ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+
+        cursor = await connection.execute("PRAGMA table_info(users)")
+        columns = {row["name"] for row in await cursor.fetchall()}
+        if "referrer_id" not in columns:
+            await connection.execute("ALTER TABLE users ADD COLUMN referrer_id INTEGER")
+        if "referral_stars_paid" not in columns:
+            await connection.execute(
+                "ALTER TABLE users ADD COLUMN referral_stars_paid INTEGER NOT NULL DEFAULT 0")
 
         await connection.commit()
 
@@ -454,6 +464,60 @@ async def orders_page(statuses: tuple[str, ...] | None, offset: int, limit: int)
             cursor = await connection.execute(
                 "SELECT * FROM orders ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
         return [Order.from_row(row) for row in await cursor.fetchall()]
+
+
+async def set_referrer(user_id: int, referrer_id: int) -> bool:
+    """Привязать пригласившего. Ставится один раз и только новичку.
+
+    Условие `referrer_id IS NULL` в самом запросе, а не проверкой перед ним: иначе повторный
+    переход по чужой ссылке переписывал бы приглашающего задним числом.
+    """
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "UPDATE users SET referrer_id = ? WHERE user_id = ? AND referrer_id IS NULL",
+            (referrer_id, user_id))
+        await connection.commit()
+        return cursor.rowcount > 0
+
+
+async def referral_stats(user_id: int) -> tuple[int, int, int]:
+    """Сколько приглашено всего, сколько из них с оплаченным заказом, сколько звёзд уже выдано.
+
+    Зачёт даётся только за приглашённого с оплатой: иначе достаточно было бы наштамповать
+    аккаунтов и пройти по своей же ссылке.
+    """
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "SELECT COUNT(*) AS invited, "
+            "       COUNT(DISTINCT CASE WHEN o.id IS NOT NULL THEN u.user_id END) AS qualified "
+            "FROM users u LEFT JOIN orders o "
+            "  ON o.user_id = u.user_id AND o.status IN ('paid', 'delivered') "
+            "WHERE u.referrer_id = ?", (user_id,))
+        row = await cursor.fetchone()
+
+        cursor = await connection.execute(
+            "SELECT referral_stars_paid FROM users WHERE user_id = ?", (user_id,))
+        paid = await cursor.fetchone()
+
+    return row["invited"], row["qualified"], (paid["referral_stars_paid"] if paid else 0)
+
+
+async def successful_order_count(user_id: int) -> int:
+    """Оплаченные заказы любого товара. profile_stats для этого не годится: он считает
+    только звёзды, а реферала засчитывает покупка чего угодно."""
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "SELECT COUNT(*) AS n FROM orders WHERE user_id = ? AND status IN ('paid', 'delivered')",
+            (user_id,))
+        return (await cursor.fetchone())["n"]
+
+
+async def add_referral_payout(user_id: int, stars: int) -> None:
+    async with connect() as connection:
+        await connection.execute(
+            "UPDATE users SET referral_stars_paid = referral_stars_paid + ? WHERE user_id = ?",
+            (stars, user_id))
+        await connection.commit()
 
 
 SUCCESSFUL_STATUSES = ("paid", "delivered")
