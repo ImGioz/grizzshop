@@ -196,6 +196,9 @@ TEXTS = {
                            "Нараховано: <b>{earned} ⭐</b>\n"
                            "Вже отримано: <b>{paid} ⭐</b>\n"
                            "Доступно зараз: <b>{available} ⭐</b>",
+        "referral_copy": "📋 Скопіювати посилання",
+        "referral_share": "📤 Поділитися",
+        "referral_share_text": "Купую зірки, Premium і подарунки тут — заходь за моїм посиланням: {link}",
         "referral_claim": "🎁 Отримати {available} ⭐",
         "referral_nothing": "Поки немає чого отримувати. Запросіть ще друзів 🙂",
         "referral_no_username": "Щоб отримати зірки, встановіть username у налаштуваннях Telegram — "
@@ -422,6 +425,9 @@ TEXTS = {
                            "Начислено: <b>{earned} ⭐</b>\n"
                            "Уже получено: <b>{paid} ⭐</b>\n"
                            "Доступно сейчас: <b>{available} ⭐</b>",
+        "referral_copy": "📋 Скопировать ссылку",
+        "referral_share": "📤 Поделиться",
+        "referral_share_text": "Покупаю звёзды, Premium и подарки тут — заходи по моей ссылке: {link}",
         "referral_claim": "🎁 Получить {available} ⭐",
         "referral_nothing": "Пока нечего получать. Пригласите ещё друзей 🙂",
         "referral_no_username": "Чтобы получить звёзды, установите username в настройках Telegram — "

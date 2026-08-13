@@ -11,7 +11,8 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, CopyTextButton, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 
 from monobank_receipt import ReceiptError, fetch_receipt
 from shop import crypto
@@ -465,20 +466,25 @@ async def menu_profile(message: Message, state: FSMContext, bot: Bot):
 
 async def referral_screen(message: Message, bot: Bot, user_id: int, language: str, edit: bool):
     state = await referrals.status(user_id)
+    link = await referrals.link(bot, user_id)
     text = t(language, "referral_screen",
              per_reward=referrals.REFERRALS_PER_REWARD,
              stars_per_reward=referrals.STARS_PER_REWARD,
-             link=await referrals.link(bot, user_id), **state)
+             link=link, **state)
 
-    rows = []
+    # copy_text кладёт ссылку в буфер обмена без единого запроса к боту; обработчика ей не нужно.
+    rows = [[InlineKeyboardButton(text=t(language, "referral_copy"),
+                                  copy_text=CopyTextButton(text=link))],
+            [InlineKeyboardButton(text=t(language, "referral_share"),
+                                  switch_inline_query=t(language, "referral_share_text", link=link))]]
     if state["available"]:
-        rows.append([InlineKeyboardButton(
+        rows.insert(0, [InlineKeyboardButton(
             text=t(language, "referral_claim", available=state["available"]),
             callback_data="ref:claim")])
 
     send = message.edit_text if edit else message.answer
     await send(text, parse_mode="HTML", disable_web_page_preview=True,
-               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows) if rows else None)
+               reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @router.callback_query(F.data == "ref:show")
