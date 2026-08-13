@@ -98,18 +98,6 @@ async def available(bot: Bot, limit: int = 100) -> list[StockGift]:
     return gifts
 
 
-def valuation_traits(gift: "StockGift") -> tuple[str | None, str | None, str | None]:
-    """Traits a gift we own is valued by — the model alone, see `price_gift`.
-
-    Shared with the cache warmer so both look under the same key; otherwise every showcase
-    would miss the cache and go to Portals live.
-    """
-    # Without a model there is nothing to compare against, so fall back to the full trait search.
-    if not gift.model:
-        return gift.model, gift.symbol, gift.backdrop
-    return gift.model, None, None
-
-
 async def price_gift(gift: StockGift, markup_percent: Decimal, ton_rate: Decimal) -> StockGift:
     """Price a gift we already own, from the marketplace floor for its model.
 
@@ -123,20 +111,7 @@ async def price_gift(gift: StockGift, markup_percent: Decimal, ton_rate: Decimal
     """
     from shop import price_cache
 
-    # Tonnel — основной источник: он знает коллекцию подарка, поэтому не может подсунуть
-    # одноимённую модель из другой, более дешёвой коллекции.
-    floor_ton = await price_cache.tonnel_floor(gift.collection, gift.model)
-
-    if floor_ton is None:
-        listing, _, _ = await price_cache.find(*valuation_traits(gift))
-        # Portals ищет модель по всему маркету, а названия моделей повторяются в разных
-        # коллекциях: "Soap Bubbles" есть и у Stellar Rocket за 11 TON, и у Lol Pop за 3.7.
-        # Без этой сверки подарок оценивался втрое дешевле себя.
-        if listing and (listing.name or "").strip().lower() == gift.collection.strip().lower():
-            floor_ton = listing.price
-        elif listing:
-            logger.warning("floor для %s пропущен: Portals отдал лот коллекции %r",
-                           gift.details, listing.name)
+    floor_ton = await price_cache.floor_ton(gift.collection, gift.model)
 
     if floor_ton:
         gift.floor_ton = floor_ton

@@ -91,14 +91,56 @@ async def tonnel_floor(collection: str | None, model: str | None,
     return price
 
 
-async def warm(gifts, delay: float = 0.5) -> int:
-    """Refresh prices for a batch of owned gifts, pacing the calls so Portals does not throttle us."""
-    from shop.nft_stock import valuation_traits  # imported here: nft_stock imports this module
+async def portals_floor(collection: str | None, model: str | None,
+                        refresh: bool = False) -> Decimal | None:
+    """Флор с Portals по модели, с проверкой коллекции.
 
+    Portals ищет модель по всему маркету, а названия моделей повторяются: "Soap Bubbles" есть
+    и у Stellar Rocket за 11 TON, и у Lol Pop за 3.7. Лот чужой коллекции отбрасываем.
+    """
+    if not model:
+        return None
+
+    try:
+        listing, _, _ = await find(model, None, None, refresh=refresh)
+    except nft_market.MarketError as error:
+        logger.warning("portals: флор для %s/%s не получен: %s", collection, model, error)
+        return None
+
+    if not listing:
+        return None
+    if collection and (listing.name or "").strip().lower() != collection.strip().lower():
+        logger.warning("portals: лот коллекции %r не подходит для %s", listing.name, collection)
+        return None
+    return listing.price
+
+
+async def floor_ton(collection: str | None, model: str | None,
+                    refresh: bool = False) -> Decimal | None:
+    """Лучшая цена подарка по обоим маркетам.
+
+    Берём минимум, а не один «основной» источник: подарок продаётся и там, и там, и клиент
+    сравнивает нашу цену с самым дешёвым предложением, которое видит. Один и тот же Candy Cane
+    Iceblink стоил 5.5 TON на Tonnel и 3.78 на Portals — оценка по Tonnel завышала на 45%.
+    """
+    tonnel = await tonnel_floor(collection, model, refresh=refresh)
+    portals = await portals_floor(collection, model, refresh=refresh)
+
+    prices = [price for price in (tonnel, portals) if price]
+    if not prices:
+        return None
+
+    logger.info("floor %s/%s: tonnel=%s portals=%s -> %s",
+                collection, model, tonnel, portals, min(prices))
+    return min(prices)
+
+
+async def warm(gifts, delay: float = 0.5) -> int:
+    """Refresh prices for a batch of owned gifts, pacing the calls so the markets do not throttle us."""
     updated = 0
     for gift in gifts:
         try:
-            await find(*valuation_traits(gift), refresh=True)
+            await floor_ton(gift.collection, gift.model, refresh=True)
             updated += 1
         except nft_market.MarketError as error:
             logger.warning("cannot refresh price for %s: %s", gift.details, error)
