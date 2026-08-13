@@ -16,7 +16,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from shop import broadcast, db, runtime
+from shop import broadcast, db, localtime, runtime
 from shop.config import ADMIN_IDS
 from shop.keyboards import product_label
 from shop.delivery import DeliveryError, deliver_gram, deliver_stars
@@ -207,14 +207,14 @@ def order_card_text(order) -> str:
         receiver,
         f"Сумма: {order.price} грн",
         f"Покупатель: <code>{order.user_id}</code>",
-        f"Создан: {order.created_at:%d.%m.%Y %H:%M} UTC",
+        f"Создан: {localtime.stamp(order.created_at)}",
     ]
     if order.sender_name:
         lines.append(f"ФИО плательщика: {order.sender_name}")
     if order.receipt_id:
         lines.append(f"Квитанция: <code>{order.receipt_id}</code>")
     if order.paid_at:
-        lines.append(f"Оплачен: {order.paid_at:%d.%m.%Y %H:%M} UTC")
+        lines.append(f"Оплачен: {localtime.stamp(order.paid_at)}")
     return "\n".join(lines)
 
 
@@ -302,8 +302,6 @@ async def show_wallet(callback: CallbackQuery):
 
 # --------------------------------------------------------------------------- stats
 
-KYIV = timezone(timedelta(hours=3))
-
 STATS_PERIODS = {
     "all": "За всё время",
     "today": "Сегодня",
@@ -314,7 +312,7 @@ STATS_PERIODS = {
 
 def period_start(period: str) -> datetime | None:
     """Everything is measured from this moment; None means no limit."""
-    now = datetime.now(KYIV)
+    now = localtime.now()
     if period == "today":
         return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "week":

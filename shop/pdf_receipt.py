@@ -15,10 +15,10 @@ from decimal import Decimal, InvalidOperation
 
 import pdfplumber
 
+from shop.localtime import KYIV
+
 logger = logging.getLogger(__name__)
 
-# Ukrainian bank receipts print local time without any zone marker.
-KYIV = timezone(timedelta(hours=3))
 
 # "1 234,56" / "1234.56" / "45,00"
 AMOUNT_PATTERN = re.compile(r"\d{1,3}(?:[   ]\d{3})+[.,]\d{2}|\d+[.,]\d{2}")

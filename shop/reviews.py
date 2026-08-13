@@ -6,11 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 
+from shop import localtime
 from shop.config import REVIEWS_CHANNEL_ID, REVIEW_NUMBER_OFFSET
 
 logger = logging.getLogger(__name__)
 
-KYIV = timezone(timedelta(hours=3))
 MAX_RATING = 5
 
 # Telegram caps a photo caption at 1024 characters, so a long comment gets trimmed.
@@ -20,7 +20,7 @@ MAX_COMMENT = 600
 def render(review_id: int, client_name: str, rating: int, comment: str | None,
            stars: int, total_stars: int, moment: datetime | None = None,
            product: str = "stars", details: str | None = None) -> str:
-    moment = moment or datetime.now(KYIV)
+    moment = moment or localtime.now()
     if product == "premium":
         delivered = f"Telegram Premium, {stars} міс."
     elif product == "gram":
