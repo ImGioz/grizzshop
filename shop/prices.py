@@ -10,29 +10,25 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 # so a custom quantity is interpolated along this curve instead of using one flat rate.
 STAR_PRICES: dict[int, Decimal] = {
     50: Decimal("45"),
-    100: Decimal("80"),
-    150: Decimal("120"),
-    200: Decimal("160"),
+    75: Decimal("65"),
+    100: Decimal("75"),
+    150: Decimal("115"),
     250: Decimal("190"),
-    300: Decimal("235"),
-    350: Decimal("275"),
-    400: Decimal("315"),
-    450: Decimal("355"),
+    350: Decimal("265"),
     500: Decimal("380"),
-    600: Decimal("445"),
-    700: Decimal("515"),
-    800: Decimal("590"),
-    900: Decimal("670"),
+    750: Decimal("565"),
     1000: Decimal("740"),
+    1500: Decimal("1130"),
+    2000: Decimal("1490"),
+    3000: Decimal("2220"),
+    5000: Decimal("3700"),
+    6000: Decimal("4400"),
+    7500: Decimal("5400"),
+    10000: Decimal("7350"),
 }
 
 # Only used beyond the largest tier; kept editable for that case.
 PRICE_PER_STAR_CUSTOM = Decimal("0.74")
-
-# Bulk orders get a thinner margin, but only on the stars above the threshold: charging the
-# lower rate on the whole order would make 3000 stars cost less than 2999.
-BULK_STARS_FROM = 3000
-PRICE_PER_STAR_BULK = Decimal("0.72")
 
 # Telegram Premium: months -> price in UAH.
 PREMIUM_PRICES: dict[int, Decimal] = {
@@ -52,21 +48,13 @@ SETTING_PREFIX = "price_stars_"
 SETTING_PER_STAR = "price_per_star"
 SETTING_PREMIUM_PREFIX = "price_premium_"
 SETTING_TON_PRICE = "price_ton"
-SETTING_BULK_RATE = "price_per_star_bulk"
-SETTING_BULK_FROM = "bulk_stars_from"
 
 
 def apply_overrides(settings: dict[str, str]) -> None:
     """Load admin-panel edits over the defaults. Called at startup and after every change."""
-    global PRICE_PER_STAR_CUSTOM, TON_PRICE_UAH, PRICE_PER_STAR_BULK, BULK_STARS_FROM
+    global PRICE_PER_STAR_CUSTOM, TON_PRICE_UAH
 
     for key, value in settings.items():
-        if key == SETTING_BULK_RATE:
-            PRICE_PER_STAR_BULK = Decimal(value)
-            continue
-        if key == SETTING_BULK_FROM:
-            BULK_STARS_FROM = int(value)
-            continue
         if key == SETTING_TON_PRICE:
             TON_PRICE_UAH = Decimal(value)
             continue
@@ -98,11 +86,6 @@ def star_price(quantity: int) -> Decimal:
     tiers = sorted(STAR_PRICES)
     if quantity >= tiers[-1]:
         rate = max(PRICE_PER_STAR_CUSTOM, STAR_PRICES[tiers[-1]] / Decimal(tiers[-1]))
-        if quantity > BULK_STARS_FROM:
-            # normal rate up to the threshold, the cheaper one only on the excess
-            below = Decimal(BULK_STARS_FROM) * rate
-            above = Decimal(quantity - BULK_STARS_FROM) * PRICE_PER_STAR_BULK
-            return _up(below + above)
         return _up(Decimal(quantity) * rate)
     if quantity <= tiers[0]:
         return _up(Decimal(quantity) * (STAR_PRICES[tiers[0]] / Decimal(tiers[0])))

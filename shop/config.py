@@ -1,7 +1,6 @@
 """Settings for the shop bot, read from .env next to the project root."""
 
 import os
-from decimal import Decimal
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -50,16 +49,13 @@ PDF_AUTO_LIMIT = os.getenv("PDF_AUTO_LIMIT", "200")
 # no order changes status and no stars are sent. Toggled from the admin panel.
 TEST_MODE = os.getenv("TEST_MODE", "0") == "1"
 
-# NFT gift marketplaces. All of them are behind auth: the token is the initData of
-# their Telegram Mini App session. Without a token the price is set by an admin.
-TONNEL_AUTH = os.getenv("TONNEL_AUTH") or None
-PORTALS_AUTH = os.getenv("PORTALS_AUTH") or None
-MRKT_AUTH = os.getenv("MRKT_AUTH") or None
-# Percent added on top of the marketplace floor price.
-NFT_MARKUP_PERCENT = Decimal(os.getenv("NFT_MARKUP_PERCENT", "10"))
-
 # Channel where reviews are published. The bot must be an administrator there.
 REVIEWS_CHANNEL_ID = os.getenv("REVIEWS_CHANNEL_ID", "@xar1zma_test")
+# Публичная ссылка на него для кнопки в меню. Числовой id (-100…) в ссылку не превращается,
+# поэтому для приватного канала её задают отдельно.
+REVIEWS_CHANNEL_URL = (os.getenv("REVIEWS_CHANNEL_URL")
+                       or (f"https://t.me/{REVIEWS_CHANNEL_ID.lstrip('@')}"
+                           if REVIEWS_CHANNEL_ID.startswith("@") else ""))
 # Added to the review id so numbering does not start from 1 on a fresh shop.
 REVIEW_NUMBER_OFFSET = int(os.getenv("REVIEW_NUMBER_OFFSET", "0"))
 

@@ -4,37 +4,37 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, InvalidOperation
 
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (CallbackQuery, CopyTextButton, InlineKeyboardButton,
-                           InlineKeyboardMarkup, Message)
+from aiogram.types import (CallbackQuery, CopyTextButton, FSInputFile, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message, ReplyKeyboardRemove)
 
 from monobank_receipt import ReceiptError, fetch_receipt
 from shop import crypto
 from shop import db
-from shop import nft_market
-from shop import nft_stock
-from shop import price_cache
+from shop import localtime
+from shop import prices
+from shop import projects
 from shop import referrals
 from shop import reviews
 from shop import runtime
-from shop.config import ADMIN_IDS, CHANNEL_ID, MIN_STARS
+from shop.config import BASE_DIR, CHANNEL_ID, MIN_STARS
 from shop.delivery import (DeliveryError, check_recipient, deliver_gram, deliver_stars,
                            parse_ton_address)
 from shop.keyboards import (calculator_again_keyboard, calculator_keyboard,
                             check_payment_keyboard, crypto_check_keyboard,
-                            language_keyboard, main_menu,
-                            months_keyboard, nft_buy_keyboard, nft_confirm_keyboard,
-                            nft_type_keyboard,
-                            payment_method_keyboard, product_label, stock_keyboard,
+                            home_keyboard, home_row, language_keyboard, main_menu,
+                            months_keyboard, more_keyboard, project_category_keyboard,
+                            projects_keyboard,
+                            payment_method_keyboard, product_label,
                             quantity_keyboard, recipient_keyboard, retry_keyboard,
                             subscription_keyboard)
-from shop.prices import (GRAM_ENABLED, MIN_TON, PREMIUM_ENABLED, TON_PRICE_UAH,
+from shop.prices import (GRAM_ENABLED, MIN_TON, PREMIUM_ENABLED,
                          gram_price, premium_price, star_price, star_rate, stars_for_budget)
 from shop.texts import DEFAULT_LANGUAGE, t
 
@@ -45,13 +45,17 @@ USERNAME_PATTERN = re.compile(r"^@?([A-Za-z][A-Za-z0-9_]{4,31})$")
 RECEIPT_PATTERN = re.compile(r"check\.monobank(?:\.com)?\.ua/p/[^\s]+")
 SUBSCRIBED_STATUSES = {"member", "administrator", "creator"}
 
-# Each gift in the window costs one Portals request to price, and Portals rate-limits.
-STOCK_LIMIT = 12
+# Картинка меню с надписями на языке клиента; для незнакомого языка берётся русская.
+MAIN_MENU_PHOTOS = {"ru": BASE_DIR / "mainmenu.jpg", "uk": BASE_DIR / "mainmenuua.jpg"}
 
 
 class Calculator(StatesGroup):
     stars = State()
     uah = State()
+
+
+class Support(StatesGroup):
+    message = State()
 
 
 class Purchase(StatesGroup):
@@ -61,59 +65,6 @@ class Purchase(StatesGroup):
     receipt_link = State()
     gram_wallet = State()
     gram_amount = State()
-    nft_request = State()
-    nft_confirm = State()
-
-
-def nft_price(floor_ton: Decimal, rate: Decimal | None = None) -> Decimal:
-    """Marketplace floor in TON converted to UAH with the shop markup on top.
-
-    The market rate is the cost basis, not TON_PRICE_UAH: the latter is the price we *sell*
-    TON at, so using it here multiplied the Gram margin by the NFT markup — a declared 10%
-    turned into nearly 40%.
-    """
-    rate = rate or crypto.market_rate()
-    total = floor_ton * rate * (1 + runtime.nft_markup_percent() / 100)
-    return total.quantize(Decimal("1"), rounding=ROUND_CEILING)
-
-
-def _stock_payload(gift, rate: Decimal, markup: Decimal) -> dict:
-    """What the confirmation card and the order need; the gift itself is re-read before transfer.
-
-    Курс и наценка сохраняются вместе с ценой: админскую формулу надо показывать ровно с теми
-    числами, по которым цена посчитана, а не с пересчитанными на момент открытия карточки.
-    """
-    return {"price": str(gift.price_uah), "details": gift.details, "link": gift.link,
-            "collection": gift.title, "model": gift.model or "—",
-            "symbol": gift.symbol or "—", "backdrop": gift.backdrop or "—",
-            "base_collection": gift.collection,
-            "floor": str(gift.floor_ton) if gift.floor_ton else "",
-            "rate": str(rate), "markup": str(markup)}
-
-
-async def admin_price_note(user_id: int, floor_ton, rate, markup, price,
-                           collection: str | None = None, model: str | None = None) -> str:
-    """Разбор цены — только администратору. Обычный клиент получает пустую строку.
-
-    Текст намеренно живёт здесь, а не в texts.py: это служебная врезка для своих, её не
-    переводят и не показывают покупателям.
-    """
-    if not runtime.is_admin(user_id) or not floor_ton:
-        return ""
-
-    sources = ""
-    if collection:
-        data = await price_cache.floors(collection, model)
-        sources = "  ·  ".join(f"{name} {value}" if value else f"{name} —"
-                               for name, value in (("Tonnel", data["tonnel"]),
-                                                   ("Portals", data["portals"])))
-        sources = f"\nМаркеты: {sources}"
-
-    multiplier = 1 + Decimal(markup) / 100
-    return (f"\n\n➖➖➖➖➖\n🔧 <b>Видно только админам</b>"
-            f"\nФлор: <b>{floor_ton}</b> TON{sources}"
-            f"\nКурс: {rate} грн  ·  наценка: {markup}%"
-            f"\n<code>{floor_ton} × {rate} × {multiplier} = {price} грн</code>")
 
 
 async def cost_in_uah(nanotons: int) -> Decimal:
@@ -124,13 +75,59 @@ async def cost_in_uah(nanotons: int) -> Decimal:
     return ((Decimal(nanotons) / Decimal(10 ** 9)) * rate).quantize(Decimal("0.01"))
 
 
-def nft_details(listing) -> str:
-    parts = [listing.name] + [p for p in (listing.model, listing.symbol, listing.backdrop) if p]
-    return " · ".join(parts)
-
-
 async def language_of(user_id: int) -> str:
     return await db.get_language(user_id) or DEFAULT_LANGUAGE
+
+
+# Telegram отдаёт file_id уже загруженной картинки, и повторные отправки идут без файла.
+_main_menu_file_ids: dict[str, str] = {}
+# Кому в этом запуске уже убрали старую reply-клавиатуру: снимается она отдельным сообщением,
+# так что делать это на каждый показ меню значило бы мигать им у клиента постоянно.
+_keyboard_cleared: set[int] = set()
+
+
+async def drop_message(message: Message):
+    """Убирает экран, из которого только что ушли, чтобы в чате не копились мёртвые меню."""
+    try:
+        await message.delete()
+    except Exception:
+        # сообщение старше 48 часов или уже удалено — не повод ронять переход
+        logger.debug("cannot delete message %s", message.message_id, exc_info=True)
+
+
+async def drop_reply_keyboard(message: Message, user_id: int):
+    """Меню теперь инлайновое, но у старых клиентов внизу висит прежняя клавиатура."""
+    if user_id in _keyboard_cleared:
+        return
+    _keyboard_cleared.add(user_id)
+    try:
+        stub = await message.answer("\u2063", reply_markup=ReplyKeyboardRemove())
+        await stub.delete()
+    except Exception:
+        logger.debug("cannot drop reply keyboard for %s", user_id, exc_info=True)
+
+
+async def send_main_menu(message: Message, user_id: int, language: str, text: str | None = None):
+    """Главное меню: картинка на языке клиента, а подпись под ней несёт инлайн-кнопки."""
+    await drop_reply_keyboard(message, user_id)
+    caption = text or t(language, "main_menu")
+    keyboard = main_menu(language)
+
+    path = MAIN_MENU_PHOTOS.get(language, MAIN_MENU_PHOTOS["ru"])
+    photo = _main_menu_file_ids.get(language) or (FSInputFile(path) if path.exists() else None)
+    if photo is not None:
+        try:
+            sent = await message.answer_photo(photo, caption=caption, parse_mode="HTML",
+                                              reply_markup=keyboard)
+            if sent.photo:
+                _main_menu_file_ids[language] = sent.photo[-1].file_id
+            return sent
+        except Exception:
+            # битый file_id или недоступный файл не должны оставлять клиента без меню
+            logger.exception("main menu photo failed for %s, falling back to text", language)
+            _main_menu_file_ids.pop(language, None)
+
+    return await message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
 
 
 async def is_subscribed(bot: Bot, user_id: int) -> bool | None:
@@ -145,7 +142,7 @@ async def is_subscribed(bot: Bot, user_id: int) -> bool | None:
 
 def payment_ok_text(language: str, product: str) -> str:
     """"Issuing stars" would be wrong for a Premium or TON order."""
-    suffix = f"_{product}" if product in ("premium", "gram", "nft", "nft_stock") else ""
+    suffix = f"_{product}" if product in ("premium", "gram") else ""
     return t(language, f"payment_ok{suffix}")
 
 
@@ -165,12 +162,16 @@ def order_line(order) -> str:
     return f"{what} → {target}"
 
 
-async def notify_admins(bot: Bot, text: str):
+async def notify_admins(bot: Bot, text: str, reply_markup=None) -> int:
+    """Сколько администраторов сообщение реально получили."""
+    delivered = 0
     for admin_id in runtime.admin_ids():
         try:
-            await bot.send_message(admin_id, text, parse_mode="HTML")
+            await bot.send_message(admin_id, text, parse_mode="HTML", reply_markup=reply_markup)
+            delivered += 1
         except Exception:
             logger.exception("cannot notify admin %s", admin_id)
+    return delivered
 
 
 # --------------------------------------------------------------------------- onboarding
@@ -193,7 +194,7 @@ async def start(message: Message, state: FSMContext, command: CommandObject, bot
         return await message.answer(t(DEFAULT_LANGUAGE, "choose_language"), reply_markup=language_keyboard())
 
     # /start иначе был бы обходом обязательной оценки: очистил состояние — и снова в меню.
-    if await review_debt(message, state, language):
+    if await review_debt(message, message.from_user.id, state, language):
         return
 
     await enter_shop(message, message.from_user.id, language)
@@ -203,7 +204,7 @@ async def enter_shop(message: Message, user_id: int, language: str):
     """Someone already marked as subscribed goes straight to the menu."""
     user = await db.get_user(user_id)
     if user and user["subscribed"]:
-        return await message.answer(t(language, "main_menu"), reply_markup=main_menu(language))
+        return await send_main_menu(message, user_id, language)
 
     await send_subscription_gate(message, language)
 
@@ -237,7 +238,8 @@ async def check_subscription(callback: CallbackQuery, bot: Bot):
     await db.set_subscribed(callback.from_user.id, True)
     await callback.answer()
     await callback.message.delete()
-    await callback.message.answer(t(language, "subscription_ok"), reply_markup=main_menu(language))
+    await send_main_menu(callback.message, callback.from_user.id, language,
+                         t(language, "subscription_ok"))
 
 
 # --------------------------------------------------------------------------- gate for everything else
@@ -258,7 +260,7 @@ async def review_cutoff() -> str:
     return since
 
 
-async def review_debt(message: Message, state: FSMContext, language: str) -> bool:
+async def review_debt(message: Message, user_id: int, state: FSMContext, language: str) -> bool:
     """Есть ли неоценённый заказ. Если есть — снова просит оценку и возвращает True.
 
     Пока клиент в середине отзыва (пишет комментарий или шлёт фото), не мешаем: оценку он
@@ -267,7 +269,7 @@ async def review_debt(message: Message, state: FSMContext, language: str) -> boo
     if await state.get_state() in (Review.comment.state, Review.photo.state):
         return False
 
-    order = await db.pending_review(message.from_user.id, await review_cutoff())
+    order = await db.pending_review(user_id, await review_cutoff())
     if not order:
         return False
 
@@ -276,23 +278,28 @@ async def review_debt(message: Message, state: FSMContext, language: str) -> boo
     return True
 
 
-async def require_access(message: Message, bot: Bot, state: FSMContext | None = None) -> str | None:
-    """Return the language when the user may proceed, otherwise re-show the gate and return None."""
-    language = await db.get_language(message.from_user.id)
+async def require_access(message: Message, user_id: int, bot: Bot,
+                         state: FSMContext | None = None) -> str | None:
+    """Return the language when the user may proceed, otherwise re-show the gate and return None.
+
+    message — куда отвечать, user_id — кого проверяем: у колбэка это разные люди, в
+    callback.message.from_user лежит сам бот.
+    """
+    language = await db.get_language(user_id)
     if not language:
         await message.answer(t(DEFAULT_LANGUAGE, "choose_language"), reply_markup=language_keyboard())
         return None
 
-    subscribed = await is_subscribed(bot, message.from_user.id)
+    subscribed = await is_subscribed(bot, user_id)
     if subscribed is None:
         await message.answer(t(language, "subscription_check_failed"))
         return None
     if not subscribed:
-        await db.set_subscribed(message.from_user.id, False)
+        await db.set_subscribed(user_id, False)
         await send_subscription_gate(message, language)
         return None
 
-    if state is not None and await review_debt(message, state, language):
+    if state is not None and await review_debt(message, user_id, state, language):
         return None
 
     return language
@@ -304,44 +311,63 @@ async def require_access(message: Message, bot: Bot, state: FSMContext | None = 
 async def cancel(message: Message, state: FSMContext):
     await state.clear()
     language = await language_of(message.from_user.id)
-    await message.answer(t(language, "cancelled"), reply_markup=main_menu(language))
+    await send_main_menu(message, message.from_user.id, language, t(language, "cancelled"))
 
 
-@router.message(F.text.in_({t("uk", "menu_stars"), t("ru", "menu_stars")}))
-async def menu_stars(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.callback_query(F.data == "menu:home")
+async def menu_home(callback: CallbackQuery, state: FSMContext):
+    """Кнопка «Главное меню»: экран, с которого ушли, удаляется, меню приходит заново."""
+    await callback.answer()
+    await state.clear()
+    language = await language_of(callback.from_user.id)
+    await drop_message(callback.message)
+    await send_main_menu(callback.message, callback.from_user.id, language)
+
+
+@router.callback_query(F.data == "menu:stars")
+async def menu_stars(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
     if not language:
         return
     await state.clear()
     await state.update_data(product="stars")
-    await message.answer(t(language, "stars_for_whom"), reply_markup=recipient_keyboard(language))
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "stars_for_whom"),
+                                  reply_markup=recipient_keyboard(language))
 
 
-@router.message(F.text.in_({t("uk", "menu_premium"), t("ru", "menu_premium")}))
-async def menu_premium(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.callback_query(F.data == "menu:premium")
+async def menu_premium(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
     if not language:
-        return
+        return await callback.answer()
     if not PREMIUM_ENABLED:
-        return await message.answer(t(language, "premium_soon"))
+        return await callback.answer(t(language, "premium_soon"), show_alert=True)
 
+    await callback.answer()
     await state.clear()
     await state.update_data(product="premium")
-    await message.answer(t(language, "premium_for_whom"), reply_markup=recipient_keyboard(language))
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "premium_for_whom"),
+                                  reply_markup=recipient_keyboard(language))
 
 
-@router.message(F.text.in_({t("uk", "menu_gram"), t("ru", "menu_gram")}))
-async def menu_gram(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.callback_query(F.data == "menu:gram")
+async def menu_gram(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
     if not language:
-        return
+        return await callback.answer()
     if not GRAM_ENABLED:
-        return await message.answer(t(language, "gram_soon"))
+        return await callback.answer(t(language, "gram_soon"), show_alert=True)
 
+    await callback.answer()
     await state.clear()
     await state.update_data(product="gram")
     await state.set_state(Purchase.gram_wallet)
-    await message.answer(t(language, "gram_ask_wallet"), parse_mode="HTML")
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "gram_ask_wallet"), parse_mode="HTML",
+                                  reply_markup=home_keyboard(language))
 
 
 @router.message(Purchase.gram_wallet)
@@ -355,7 +381,8 @@ async def set_gram_wallet(message: Message, state: FSMContext):
     await state.update_data(wallet=wallet)
     await state.set_state(Purchase.gram_amount)
     await message.answer(t(language, "gram_ask_amount", wallet=wallet,
-                           min_ton=MIN_TON, rate=TON_PRICE_UAH), parse_mode="HTML")
+                           min_ton=MIN_TON, rate=prices.TON_PRICE_UAH), parse_mode="HTML",
+                         reply_markup=home_keyboard(language))
 
 
 @router.message(Purchase.gram_amount)
@@ -372,14 +399,16 @@ async def set_gram_amount(message: Message, state: FSMContext):
     await create_order_message(message, message.from_user.id, state, nanotons, language)
 
 
-@router.message(F.text.in_({t("uk", "menu_calculator"), t("ru", "menu_calculator")}))
-async def menu_calculator(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.callback_query(F.data == "menu:calc")
+async def menu_calculator(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
     if not language:
         return
     await state.clear()
-    await message.answer(t(language, "calc_choose"), parse_mode="HTML",
-                         reply_markup=calculator_keyboard(language))
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "calc_choose"), parse_mode="HTML",
+                                  reply_markup=calculator_keyboard(language))
 
 
 @router.callback_query(F.data == "calc:menu")
@@ -387,6 +416,7 @@ async def calculator_menu(callback: CallbackQuery, state: FSMContext):
     language = await language_of(callback.from_user.id)
     await state.clear()
     await callback.answer()
+    await drop_message(callback.message)
     await callback.message.answer(t(language, "calc_choose"), parse_mode="HTML",
                                   reply_markup=calculator_keyboard(language))
 
@@ -398,7 +428,8 @@ async def calculator_direction(callback: CallbackQuery, state: FSMContext):
 
     await state.set_state(Calculator.stars if to_uah else Calculator.uah)
     await callback.answer()
-    await callback.message.edit_text(t(language, "calc_ask_stars" if to_uah else "calc_ask_uah"))
+    await callback.message.edit_text(t(language, "calc_ask_stars" if to_uah else "calc_ask_uah"),
+                                     reply_markup=home_keyboard(language))
 
 
 def _positive_number(text: str) -> Decimal | None:
@@ -448,20 +479,112 @@ async def calculate_to_stars(message: Message, state: FSMContext):
     await message.answer(text, parse_mode="HTML", reply_markup=calculator_again_keyboard(language))
 
 
-@router.message(F.text.in_({t("uk", "menu_profile"), t("ru", "menu_profile")}))
-async def menu_profile(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.callback_query(F.data == "menu:profile")
+async def menu_profile(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
     if not language:
         return
 
-    paid_orders, total_stars = await db.profile_stats(message.from_user.id)
-    username = f"@{message.from_user.username}" if message.from_user.username else "—"
-    await message.answer(
-        t(language, "profile", user_id=message.from_user.id, username=username,
+    paid_orders, total_stars = await db.profile_stats(callback.from_user.id)
+    username = f"@{callback.from_user.username}" if callback.from_user.username else "—"
+    await drop_message(callback.message)
+    await callback.message.answer(
+        t(language, "profile", user_id=callback.from_user.id, username=username,
           language=language, paid_orders=paid_orders, total_stars=total_stars),
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=t(language, "menu_referral"), callback_data="ref:show")]]))
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=t(language, "menu_referral"), callback_data="ref:show")],
+            home_row(language)]))
+
+
+# --------------------------------------------------------------------------- more
+
+@router.callback_query(F.data == "menu:more")
+async def menu_more(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
+    if not language:
+        return
+    await state.clear()
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "more_choose"), reply_markup=more_keyboard(language))
+
+
+@router.callback_query(F.data == "more:projects")
+async def other_projects(callback: CallbackQuery):
+    language = await language_of(callback.from_user.id)
+    await callback.answer()
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "other_projects", founder=projects.FOUNDER),
+                                  parse_mode="HTML", disable_web_page_preview=True,
+                                  reply_markup=projects_keyboard(language))
+
+
+@router.callback_query(F.data.startswith("proj:"))
+async def project_category(callback: CallbackQuery):
+    key = callback.data.split(":", 1)[1]
+    if key not in projects.CATEGORIES:
+        return await callback.answer()
+
+    language = await language_of(callback.from_user.id)
+    await callback.answer()
+    await drop_message(callback.message)
+    await callback.message.answer(
+        t(language, "projects_category", title=projects.title(key, language)),
+        parse_mode="HTML", disable_web_page_preview=True,
+        reply_markup=project_category_keyboard(language, key))
+
+
+# --------------------------------------------------------------------------- support
+
+@router.callback_query(F.data == "more:support")
+async def support_start(callback: CallbackQuery, state: FSMContext, bot: Bot):
+    await callback.answer()
+    language = await require_access(callback.message, callback.from_user.id, bot, state)
+    if not language:
+        return
+    await state.clear()
+    await state.set_state(Support.message)
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "support_ask"), parse_mode="HTML",
+                                  reply_markup=home_keyboard(language))
+
+
+def support_ticket(ticket_id: int, user, text: str) -> str:
+    """Карточка обращения для админов. Русский, как и вся служебная переписка."""
+    name = user.full_name or "—"
+    username = f"@{user.username}" if user.username else "—"
+    return (f"🆘 <b>Обращение в поддержку №{ticket_id}</b>\n\n"
+            f"👤 {name}\n"
+            f"🔗 {username}\n"
+            f"🆔 <code>{user.id}</code>\n"
+            f"🕒 {localtime.stamp(localtime.now())}\n\n"
+            f"💬 {text}")
+
+
+@router.message(Support.message)
+async def support_send(message: Message, state: FSMContext, bot: Bot):
+    language = await language_of(message.from_user.id)
+    text = (message.text or "").strip()
+    if not text:
+        # фото и файлы админу переслать некуда: ответ идёт обратно текстом
+        return await message.answer(t(language, "support_text_only"))
+
+    await state.clear()
+    # Тикет заводится до рассылки: по его номеру админы и договариваются, кто отвечает.
+    ticket_id = await db.create_ticket(message.from_user.id, text)
+    reply_button = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text="✍️ Ответить", callback_data=f"adm:support:reply:{ticket_id}")]])
+    delivered = await notify_admins(bot, support_ticket(ticket_id, message.from_user, text),
+                                    reply_button)
+
+    if not delivered:
+        logger.error("обращение %s от %s никому не доставлено", ticket_id, message.from_user.id)
+        return await send_main_menu(message, message.from_user.id, language,
+                                    t(language, "support_failed"))
+
+    await send_main_menu(message, message.from_user.id, language, t(language, "support_sent"))
 
 
 # --------------------------------------------------------------------------- referrals
@@ -479,6 +602,7 @@ async def referral_screen(message: Message, bot: Bot, user_id: int, language: st
                                   copy_text=CopyTextButton(text=link))],
             [InlineKeyboardButton(text=t(language, "referral_share"),
                                   switch_inline_query=t(language, "referral_share_text", link=link))]]
+    rows.append(home_row(language))
     if state["available"]:
         rows.insert(0, [InlineKeyboardButton(
             text=t(language, "referral_claim", available=state["available"]),
@@ -592,7 +716,8 @@ async def choose_recipient(callback: CallbackQuery, state: FSMContext):
 
     if callback.data.endswith("friend"):
         await state.set_state(Purchase.friend_username)
-        return await callback.message.edit_text(t(language, "ask_friend_username"))
+        return await callback.message.edit_text(t(language, "ask_friend_username"),
+                                                reply_markup=home_keyboard(language))
 
     username = callback.from_user.username
     if not username:
@@ -677,7 +802,8 @@ async def choose_quantity(callback: CallbackQuery, state: FSMContext):
 
     if choice == "custom":
         await state.set_state(Purchase.custom_quantity)
-        return await callback.message.edit_text(t(language, "ask_custom_quantity", min_stars=MIN_STARS))
+        return await callback.message.edit_text(t(language, "ask_custom_quantity", min_stars=MIN_STARS),
+                                                reply_markup=home_keyboard(language))
 
     await create_order_message(callback.message, callback.from_user.id, state, int(choice), language)
 
@@ -809,8 +935,8 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(t(language, "order_cancelled", order_id=order_id),
-                                  reply_markup=main_menu(language))
+    await send_main_menu(callback.message, callback.from_user.id, language,
+                         t(language, "order_cancelled", order_id=order_id))
 
 
 @router.callback_query(F.data.startswith("check:"))
@@ -965,36 +1091,6 @@ async def fulfil_order(message: Message, bot: Bot, order, language: str, state: 
         await db.update_order(order.id, status="delivered")
         return await message.answer("🧪 Тестовая оплата принята. Ничего не выдано.")
 
-    if order.product == "nft_stock":
-        # Telegram currently withholds can_transfer_and_upgrade_gifts from business bots, so the
-        # automatic path is attempted first and falls back to a manual handover when refused.
-        # Once the restriction is lifted this starts working on its own, with no code change.
-        try:
-            gift = await nft_stock.by_id(bot, order.wallet_address)
-            if not gift:
-                raise nft_stock.StockError("подарок больше не доступен к передаче")
-            await nft_stock.transfer(bot, gift, order.user_id)
-        except nft_stock.StockError as error:
-            logger.warning("automatic transfer unavailable for order %s: %s", order.id, error)
-            await db.update_order(order.id, status="paid")
-            await notify_admins(bot, f"🖼 Заказ <code>{order.id}</code> оплачен: {order.details}\n"
-                                     f"Покупатель @{order.recipient} (<code>{order.user_id}</code>).\n"
-                                     f"Автопередача недоступна: {error}\n"
-                                     f"Передайте подарок вручную.")
-            return await message.answer(t(language, "delivery_ok_nft"))
-
-        await db.update_order(order.id, status="delivered")
-        await message.answer(t(language, "delivery_ok_nft_stock", details=order.details),
-                             parse_mode="HTML")
-        return await ask_for_review(message, state, order, language)
-
-    if order.product == "nft":
-        # nothing to automate: the gift is transferred by hand from the manager's profile
-        await notify_admins(bot, f"🖼 Заказ <code>{order.id}</code> оплачен: {what}\n"
-                                 f"Покупатель @{order.recipient}. Нужна ручная передача подарка.")
-        await db.update_order(order.id, status="paid")
-        return await message.answer(t(language, "delivery_ok_nft"))
-
     try:
         if order.product == "gram":
             spent = await deliver_gram(order.wallet_address, order.quantity)
@@ -1131,211 +1227,27 @@ async def finish_review(message: Message, state: FSMContext, bot: Bot, language:
                           details=data.get("review_details"))
     published = await reviews.publish(bot, text, photo_file_id)
 
-    await message.answer(t(language, "review_thanks" if published else "review_not_published"),
-                         reply_markup=main_menu(language))
+    await send_main_menu(message, user.id, language,
+                         t(language, "review_thanks" if published else "review_not_published"))
 
 
-@router.business_connection()
-async def business_connected(connection, bot: Bot):
-    """The owner attached the bot to their account: remember the id, gifts flow through it."""
-    if connection.is_enabled:
-        await nft_stock.save_business_id(connection.id)
-        rights = connection.rights
-        can_transfer = bool(rights and rights.can_transfer_and_upgrade_gifts)
-        logger.info("business connection %s enabled, can transfer gifts: %s",
-                    connection.id, can_transfer)
-        note = ("" if can_transfer else
-                "\n\n⚠️ Не выдано право «Передавать и улучшать подарки» — "
-                "выдача из списка работать не будет.")
-        await notify_admins(bot, f"🔗 Бизнес-связка подключена: <code>{connection.id}</code>{note}")
-    else:
-        logger.warning("business connection %s disabled", connection.id)
-        await notify_admins(bot, "🔌 Бизнес-связка отключена — продажа NFT из списка остановлена.")
+# --------------------------------------------------------------------------- legacy reply keyboard
+
+# Меню переехало в инлайн-кнопки, но у клиента, не заходившего с тех пор, старая клавиатура
+# всё ещё открыта. Её нажатие приходит обычным текстом и без этого не делало бы ничего.
+# Регистрируется последним, чтобы не перехватывать ввод у тех, кто сейчас в середине заказа.
+LEGACY_MENU_TEXTS = {t(language, key)
+                     for language in ("uk", "ru")
+                     for key in ("menu_stars", "menu_premium", "menu_gram", "menu_more",
+                                 "menu_calculator", "menu_profile")}
+LEGACY_MENU_TEXTS.add("🖼 Список NFT")   # раздел убран, но кнопка ещё висит у старых клиентов
 
 
-# --------------------------------------------------------------------------- NFT
-
-@router.message(F.text.in_({t("uk", "menu_nft"), t("ru", "menu_nft")}))
-async def menu_nft(message: Message, state: FSMContext, bot: Bot):
-    language = await require_access(message, bot, state)
+@router.message(F.text.in_(LEGACY_MENU_TEXTS))
+async def legacy_menu_button(message: Message, state: FSMContext, bot: Bot):
+    language = await require_access(message, message.from_user.id, bot, state)
     if not language:
         return
     await state.clear()
-    await message.answer(t(language, "nft_choose_type"), reply_markup=nft_type_keyboard(language))
-
-
-@router.callback_query(F.data == "nft:list")
-async def nft_from_list(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    language = await language_of(callback.from_user.id)
-    await callback.answer()
-
-    try:
-        gifts = await nft_stock.available(bot)
-    except nft_stock.StockError as error:
-        logger.warning("stock unavailable: %s", error)
-        return await callback.message.answer(t(language, "nft_stock_error", error=error))
-
-    if not gifts:
-        return await callback.message.answer(t(language, "nft_stock_empty"))
-
-    market = await asyncio.to_thread(crypto.market_rate)
-    priced = []
-    for gift in gifts[:STOCK_LIMIT]:
-        await nft_stock.price_gift(gift, runtime.nft_markup_percent(), market)
-        if gift.price_uah:
-            priced.append(gift)
-
-    if not priced:
-        return await callback.message.answer(t(language, "nft_stock_empty"))
-
-    markup = runtime.nft_markup_percent()
-    await state.update_data(stock={g.owned_gift_id: _stock_payload(g, market, markup)
-                                   for g in priced})
-    await callback.message.edit_text(t(language, "nft_stock_title"), parse_mode="HTML",
-                                     reply_markup=stock_keyboard(priced))
-
-
-@router.callback_query(F.data.startswith("nft:take:"))
-async def nft_take_from_stock(callback: CallbackQuery, state: FSMContext):
-    """Show the gift itself before committing: traits and a link, not just a line in a list."""
-    language = await language_of(callback.from_user.id)
-    chosen = callback.data.split(":", 2)[2]
-    payload = (await state.get_data()).get("stock", {}).get(chosen)
-    if not payload:
-        return await callback.answer(t(language, "nft_stock_gone"), show_alert=True)
-
-    await callback.answer()
-    note = await admin_price_note(callback.from_user.id, payload.get("floor"),
-                                  payload.get("rate"), payload.get("markup"), payload["price"],
-                                  payload.get("base_collection"), payload.get("model"))
-    await callback.message.edit_text(
-        t(language, "nft_stock_card", collection=payload["collection"], model=payload["model"],
-          symbol=payload["symbol"], backdrop=payload["backdrop"], link=payload["link"],
-          price=payload["price"]) + note,
-        parse_mode="HTML", disable_web_page_preview=False,
-        reply_markup=nft_buy_keyboard(language, chosen))
-
-
-@router.callback_query(F.data == "nft:decline")
-async def nft_decline(callback: CallbackQuery, state: FSMContext):
-    language = await language_of(callback.from_user.id)
-    await state.clear()
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(t(language, "nft_declined"), reply_markup=main_menu(language))
-
-
-@router.callback_query(F.data.startswith("nft:buy:"))
-async def nft_buy_from_stock(callback: CallbackQuery, state: FSMContext):
-    language = await language_of(callback.from_user.id)
-    chosen = callback.data.split(":", 2)[2]
-    payload = (await state.get_data()).get("stock", {}).get(chosen)
-    if not payload:
-        return await callback.answer(t(language, "nft_stock_gone"), show_alert=True)
-
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    price = Decimal(payload["price"])
-    recipient = callback.from_user.username or str(callback.from_user.id)
-    order_id = await db.create_order(callback.from_user.id, "nft_stock", recipient, 1, price,
-                                     card_number=runtime.card_number(),
-                                     details=payload["details"], wallet_address=chosen)
-    await state.update_data(order_id=order_id)
-
-    await callback.message.answer(
-        t(language, "order_created", recipient=f"@{recipient}",
-          product=product_label(language, "nft", 1, payload["details"]), price=price),
-        parse_mode="HTML", reply_markup=payment_method_keyboard(language, order_id))
-
-
-@router.callback_query(F.data == "nft:market")
-async def nft_market_start(callback: CallbackQuery, state: FSMContext):
-    language = await language_of(callback.from_user.id)
-    await state.set_state(Purchase.nft_request)
-    await callback.answer()
-    await callback.message.edit_text(t(language, "nft_market_hello"), parse_mode="HTML")
-
-
-@router.message(Purchase.nft_request)
-async def nft_search(message: Message, state: FSMContext):
-    language = await language_of(message.from_user.id)
-
-    request = nft_market.parse_request(message.text or "")
-    if not request:
-        return await message.answer(t(language, "nft_bad_input"))
-
-    status = await message.answer(t(language, "nft_searching"))
-    try:
-        if request["kind"] == "link":
-            # the link identifies one gift; read its traits and look for another one like it
-            gift = await asyncio.to_thread(nft_market.gift_from_link, request["slug"], request["number"])
-            if not gift:
-                return await status.edit_text(t(language, "nft_not_found"))
-            request = gift
-
-        listing, quality, _ = await price_cache.find(
-            request["model"], request["symbol"], request["backdrop"])
-    except nft_market.MarketError as error:
-        logger.warning("nft search failed: %s", error)
-        return await status.edit_text(t(language, "nft_market_error", error=error))
-
-    if not listing:
-        return await status.edit_text(t(language, "nft_not_found"))
-
-    price = nft_price(listing.price)
-    await state.update_data(product="nft", nft_price=str(price),
-                            nft_details=nft_details(listing), nft_link=listing.link)
-    await state.set_state(Purchase.nft_confirm)
-
-    # say plainly when this is not the same gift: the traits change the value, and a customer
-    # must not think they are buying exactly what they linked
-    if quality == "exact":
-        header = t(language, "nft_header_exact")
-    else:
-        header = t(language, "nft_header_similar", model=request["model"] or "—",
-                   symbol=request["symbol"] or "—", backdrop=request["backdrop"] or "—")
-
-    # На маркете цена считается от конкретного лота, который мы и купим, поэтому разбор без
-    # сравнения маркетов: подменять источник тут нельзя, покупка идёт именно на Portals.
-    rate = await asyncio.to_thread(crypto.market_rate)
-    note = await admin_price_note(message.from_user.id, listing.price, rate,
-                                  runtime.nft_markup_percent(), price)
-
-    await status.edit_text(
-        header + t(language, "nft_card", collection=listing.name, model=listing.model or "—",
-                   symbol=listing.symbol or "—", backdrop=listing.backdrop or "—",
-                   price=price) + note,
-        parse_mode="HTML", reply_markup=nft_confirm_keyboard(language))
-
-
-@router.callback_query(F.data == "nft:drop")
-async def nft_drop(callback: CallbackQuery, state: FSMContext):
-    language = await language_of(callback.from_user.id)
-    await state.clear()
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.message.answer(t(language, "nft_cancelled"), reply_markup=main_menu(language))
-
-
-@router.callback_query(F.data == "nft:order")
-async def nft_order(callback: CallbackQuery, state: FSMContext):
-    language = await language_of(callback.from_user.id)
-    data = await state.get_data()
-    if not data.get("nft_price"):
-        return await callback.answer(t(language, "no_active_order"), show_alert=True)
-
-    await callback.answer()
-    await callback.message.edit_reply_markup(reply_markup=None)
-
-    price = Decimal(data["nft_price"])
-    recipient = callback.from_user.username or str(callback.from_user.id)
-    order_id = await db.create_order(callback.from_user.id, "nft", recipient, 1, price,
-                                     card_number=runtime.card_number(),
-                                     details=data["nft_details"])
-    await state.update_data(order_id=order_id)
-
-    await callback.message.answer(
-        t(language, "order_created", recipient=f"@{recipient}",
-          product=product_label(language, "nft", 1, data["nft_details"]), price=price),
-        parse_mode="HTML", reply_markup=payment_method_keyboard(language, order_id))
+    _keyboard_cleared.discard(message.from_user.id)  # клавиатура жива, снимаем ещё раз
+    await send_main_menu(message, message.from_user.id, language)

@@ -64,11 +64,17 @@ CREATE TABLE IF NOT EXISTS reviews (
     created_at    TEXT NOT NULL
 );
 
--- Marketplace floor prices, so a showcase does not wait on four rate-limited lookups per gift.
-CREATE TABLE IF NOT EXISTS price_cache (
-    key        TEXT PRIMARY KEY,      -- model|symbol|backdrop
-    payload    TEXT NOT NULL,         -- serialised listing
-    updated_at TEXT NOT NULL
+-- Обращения в поддержку. Отвечает только один админ: кто первым записался в answered_by,
+-- тот и отвечает, остальным кнопка ответа больше не срабатывает.
+CREATE TABLE IF NOT EXISTS support_tickets (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL,
+    message      TEXT NOT NULL,
+    created_at   TEXT NOT NULL,
+    answered_by  INTEGER,
+    answered_name TEXT,
+    answered_at  TEXT,
+    answer       TEXT
 );
 
 -- Admins added from the panel. Those listed in .env are permanent and live outside this table.
@@ -322,26 +328,6 @@ async def set_blocked(user_id: int, blocked: bool = True):
         await connection.commit()
 
 
-async def cached_price(key: str) -> tuple[dict, datetime] | None:
-    async with connect() as connection:
-        cursor = await connection.execute(
-            "SELECT payload, updated_at FROM price_cache WHERE key = ?", (key,))
-        row = await cursor.fetchone()
-        if not row:
-            return None
-        return json.loads(row["payload"]), datetime.fromisoformat(row["updated_at"])
-
-
-async def store_price(key: str, payload: dict) -> None:
-    async with connect() as connection:
-        await connection.execute(
-            "INSERT INTO price_cache (key, payload, updated_at) VALUES (?, ?, ?) "
-            "ON CONFLICT (key) DO UPDATE SET payload = excluded.payload, "
-            "updated_at = excluded.updated_at",
-            (key, json.dumps(payload, ensure_ascii=False), _now()))
-        await connection.commit()
-
-
 async def add_admin(user_id: int, note: str | None, added_by: int) -> bool:
     """False when this id is already an admin."""
     async with connect() as connection:
@@ -366,6 +352,46 @@ async def list_admins() -> list:
     async with connect() as connection:
         cursor = await connection.execute("SELECT * FROM admins ORDER BY added_at")
         return list(await cursor.fetchall())
+
+
+async def create_ticket(user_id: int, message: str) -> int:
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "INSERT INTO support_tickets (user_id, message, created_at) VALUES (?, ?, ?)",
+            (user_id, message, _now()))
+        await connection.commit()
+        return cursor.lastrowid
+
+
+async def get_ticket(ticket_id: int):
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "SELECT * FROM support_tickets WHERE id = ?", (ticket_id,))
+        return await cursor.fetchone()
+
+
+async def claim_ticket(ticket_id: int, admin_id: int, admin_name: str, answer: str) -> bool:
+    """Записать ответ. False, если этот админ не первый — тогда его ответ никуда не уходит.
+
+    Условие answered_by IS NULL стоит прямо в UPDATE: два админа, нажавшие «Ответить»
+    одновременно, иначе успели бы отправить клиенту два ответа.
+    """
+    async with connect() as connection:
+        cursor = await connection.execute(
+            "UPDATE support_tickets SET answered_by = ?, answered_name = ?, answered_at = ?, "
+            "answer = ? WHERE id = ? AND answered_by IS NULL",
+            (admin_id, admin_name, _now(), answer, ticket_id))
+        await connection.commit()
+        return cursor.rowcount > 0
+
+
+async def release_ticket(ticket_id: int) -> None:
+    """Снять отметку об ответе: ответ не дошёл до клиента, значит обращение снова свободно."""
+    async with connect() as connection:
+        await connection.execute(
+            "UPDATE support_tickets SET answered_by = NULL, answered_name = NULL, "
+            "answered_at = NULL, answer = NULL WHERE id = ?", (ticket_id,))
+        await connection.commit()
 
 
 async def admin_ids() -> set[int]:

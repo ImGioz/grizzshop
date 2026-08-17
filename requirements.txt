@@ -12,10 +12,6 @@ pdfplumber==0.11.10
 # Fragment API
 requests==2.31.0
 
-# Tonnel закрыт Cloudflare, который отсеивает по TLS-отпечатку клиента: обычный requests
-# и системный curl получают 403 даже с точными заголовками. curl_cffi притворяется Chrome.
-curl_cffi==0.16.0
-
 # TON: tonutils is the one that can derive and sign W5 (Telegram Wallet) wallets
 tonutils==2.1.2
 ton-core==0.3.6

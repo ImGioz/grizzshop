@@ -26,7 +26,7 @@ def render(review_id: int, client_name: str, rating: int, comment: str | None,
     elif product == "gram":
         delivered = f"{stars / 10 ** 9:g} TON"
     elif product in ("nft", "nft_stock"):
-        # quantity is always 1 for a gift, so the description is what carries the meaning
+        # продажа NFT убрана, но отзывы на прошлые заказы остаются в канале
         delivered = details or "NFT"
     else:
         delivered = f"{stars} ⭐️"

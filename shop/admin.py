@@ -16,14 +16,16 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from shop import broadcast, db, localtime, runtime
+from shop import broadcast, db, localtime, prices, runtime
 from shop.config import ADMIN_IDS
 from shop.keyboards import product_label
+from shop.texts import DEFAULT_LANGUAGE, t
 from shop.delivery import DeliveryError, deliver_gram, deliver_stars
-from shop.prices import (PREMIUM_PRICES, PRICE_PER_STAR_CUSTOM, SETTING_PER_STAR,
-                         PRICE_PER_STAR_BULK, BULK_STARS_FROM, SETTING_BULK_RATE, SETTING_BULK_FROM,
+# Цены, которые правятся из панели, читаются как prices.X: apply_overrides переприсваивает
+# их в модуле, и импортированная по имени копия так и осталась бы прежней до перезапуска.
+from shop.prices import (PREMIUM_PRICES, SETTING_PER_STAR,
                          SETTING_PREFIX, SETTING_PREMIUM_PREFIX, SETTING_TON_PRICE,
-                         TON_PRICE_UAH, STAR_PRICES, apply_overrides)
+                         STAR_PRICES, apply_overrides)
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +67,7 @@ class AdminStates(StatesGroup):
     add_admin = State()
     edit_premium = State()
     edit_ton = State()
-    edit_bulk = State()
-    edit_nft_markup = State()
+    support_reply = State()
 
 
 def button(text: str, *parts) -> InlineKeyboardButton:
@@ -380,14 +381,11 @@ def prices_keyboard() -> InlineKeyboardMarkup:
     star_buttons = [button(f"{quantity} ⭐ — {price} грн", "prices", "edit", quantity)
                     for quantity, price in sorted(STAR_PRICES.items())]
     rows = [star_buttons[i:i + 2] for i in range(0, len(star_buttons), 2)]
-    rows.append([button(f"Цена за звезду (своё кол-во) — {PRICE_PER_STAR_CUSTOM}", "prices", "edit", "custom")])
+    rows.append([button(f"Цена за звезду (своё кол-во) — {prices.PRICE_PER_STAR_CUSTOM}",
+                        "prices", "edit", "custom")])
     rows += [[button(f"Premium {months} мес. — {price} грн", "prices", "edit", f"premium{months}")]
              for months, price in sorted(PREMIUM_PRICES.items())]
-    rows.append([button(f"Опт: от {BULK_STARS_FROM} ⭐ по {PRICE_PER_STAR_BULK} грн",
-                        "prices", "edit", "bulk")])
-    rows.append([button(f"Курс TON — {TON_PRICE_UAH} грн", "prices", "edit", "ton")])
-    rows.append([button(f"Наценка на подарки — {runtime.nft_markup_percent()}%",
-                        "prices", "edit", "nft")])
+    rows.append([button(f"Курс TON — {prices.TON_PRICE_UAH} грн", "prices", "edit", "ton")])
     rows.append([button("⬅️ В меню", "menu", "show")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -403,25 +401,11 @@ async def edit_price(callback: CallbackQuery, state: FSMContext):
     target = callback.data.split(":")[-1]
     await callback.answer()
 
-    if target == "bulk":
-        await state.set_state(AdminStates.edit_bulk)
-        return await callback.message.edit_text(
-            f"Оптовая ставка: <b>{PRICE_PER_STAR_BULK}</b> грн за звезду сверх "
-            f"<b>{BULK_STARS_FROM}</b> ⭐\n\n"
-            f"Пришлите два числа через пробел: порог и ставку.\n"
-            f"Например: <code>3000 0.72</code>", parse_mode="HTML")
-
-    if target == "nft":
-        await state.set_state(AdminStates.edit_nft_markup)
-        return await callback.message.edit_text(
-            f"Наценка на подарки: <b>{runtime.nft_markup_percent()}%</b> сверх цены маркета.\n\n"
-            f"Действует и на подарки с маркета, и на подарки из профиля.\n"
-            f"Пришлите новое значение числом, например <code>15</code>.", parse_mode="HTML")
-
     if target == "ton":
         await state.set_state(AdminStates.edit_ton)
         return await callback.message.edit_text(
-            f"Курс TON: <b>{TON_PRICE_UAH}</b> грн за 1 TON\nПришлите новое значение числом.",
+            f"Курс TON: <b>{prices.TON_PRICE_UAH}</b> грн за 1 TON\n"
+            f"Пришлите новое значение числом.",
             parse_mode="HTML")
 
     if target.startswith("premium"):
@@ -435,7 +419,7 @@ async def edit_price(callback: CallbackQuery, state: FSMContext):
     if target == "custom":
         await state.set_state(AdminStates.edit_per_star)
         return await callback.message.edit_text(
-            f"Текущая цена за одну звезду: <b>{PRICE_PER_STAR_CUSTOM}</b> грн\n"
+            f"Текущая цена за одну звезду: <b>{prices.PRICE_PER_STAR_CUSTOM}</b> грн\n"
             f"Пришлите новое значение числом (например 0.95).", parse_mode="HTML")
 
     await state.update_data(quantity=int(target))
@@ -465,29 +449,6 @@ async def save_price(message: Message, state: FSMContext):
 
     await state.clear()
     await message.answer(f"Цена пакета {quantity} ⭐ теперь <b>{price}</b> грн", parse_mode="HTML",
-                         reply_markup=prices_keyboard())
-
-
-@router.message(AdminStates.edit_nft_markup)
-async def save_nft_markup(message: Message, state: FSMContext):
-    raw = (message.text or "").strip().replace(",", ".").rstrip("%")
-    try:
-        percent = Decimal(raw)
-    except InvalidOperation:
-        return await message.answer("Нужно число, например 15. Попробуйте ещё раз.")
-
-    # Ноль — законная наценка (продажа по цене маркета), а вот отрицательная означала бы
-    # продажу дешевле закупки, и почти наверняка это опечатка.
-    if not 0 <= percent <= 200:
-        return await message.answer("Наценка должна быть от 0 до 200 процентов.")
-
-    # Кэш маркета трогать не нужно: там лежат цены в TON, наценка накладывается поверх при
-    # каждом показе, поэтому новое значение действует сразу.
-    await db.set_setting(runtime.KEY_NFT_MARKUP, str(percent))
-    await reload_runtime()
-
-    await state.clear()
-    await message.answer(f"Наценка на подарки теперь <b>{percent}%</b>", parse_mode="HTML",
                          reply_markup=prices_keyboard())
 
 
@@ -798,8 +759,9 @@ async def show_admins(callback: CallbackQuery, state: FSMContext):
 
     owners = "\n".join(f"  <code>{uid}</code>" for uid in sorted(ADMIN_IDS)) or "  —"
     text = (f"<b>Администраторы</b>\n\n"
-            f"Из <code>.env</code> (постоянные, снять нельзя):\n{owners}\n\n"
+            f"Из .env (снять нельзя):\n{owners}\n\n"
             f"Добавленные из панели: {len(added)}\n"
+            f"У них те же права, кроме снятия админов из .env.\n"
             f"Нажмите на запись, чтобы удалить её.")
 
     await render(callback, text, admins_keyboard(added))
@@ -921,17 +883,85 @@ async def test_payment(message: Message, state: FSMContext):
         parse_mode="HTML", reply_markup=crypto_check_keyboard(ADMIN_LANGUAGE, order_id))
 
 
-@router.message(AdminStates.edit_bulk)
-async def save_bulk_rate(message: Message, state: FSMContext):
-    parts = (message.text or "").replace(",", ".").split()
-    if len(parts) != 2 or not parts[0].isdigit() or _parse_price(parts[1]) is None:
-        return await message.answer("Нужны два числа: порог и ставка. Например: 3000 0.72")
+# --------------------------------------------------------------------------- support
 
-    threshold, rate = int(parts[0]), _parse_price(parts[1])
-    await db.set_setting(SETTING_BULK_FROM, str(threshold))
-    await db.set_setting(SETTING_BULK_RATE, str(rate))
-    apply_overrides(await db.get_settings())
+def admin_name(user) -> str:
+    """Кем подписан ответ в глазах других админов."""
+    return f"@{user.username}" if user.username else (user.full_name or str(user.id))
+
+
+async def close_ticket_card(message: Message, note: str):
+    """Убрать кнопку с карточки обращения и дописать, чем всё закончилось."""
+    try:
+        await message.edit_text(f"{message.html_text}\n\n{note}", parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+
+
+@router.callback_query(F.data.startswith("adm:support:reply:"))
+async def support_reply(callback: CallbackQuery, state: FSMContext):
+    ticket_id = int(callback.data.split(":")[-1])
+    ticket = await db.get_ticket(ticket_id)
+
+    if not ticket:
+        return await callback.answer("Обращение не найдено", show_alert=True)
+    if ticket["answered_by"]:
+        # отвечает только первый: остальным кнопка уже не работает
+        await callback.answer(f"На это обращение ответил {ticket['answered_name']}", show_alert=True)
+        return await close_ticket_card(callback.message,
+                                       f"✅ Ответил {ticket['answered_name']}")
 
     await state.clear()
-    await message.answer(f"Сверх <b>{threshold}</b> ⭐ ставка теперь <b>{rate}</b> грн за звезду",
-                         parse_mode="HTML", reply_markup=prices_keyboard())
+    await state.update_data(support_ticket=ticket_id, support_user=ticket["user_id"],
+                            support_card=callback.message.message_id)
+    await state.set_state(AdminStates.support_reply)
+    await callback.answer()
+    await callback.message.answer(
+        f"Ответ по обращению <b>№{ticket_id}</b> для <code>{ticket['user_id']}</code>.\n\n"
+        f"Пришлите текст одним сообщением.", parse_mode="HTML")
+
+
+@router.message(AdminStates.support_reply)
+async def support_send_reply(message: Message, state: FSMContext, bot: Bot):
+    text = (message.text or "").strip()
+    if not text:
+        return await message.answer("Нужен текст. Пришлите ответ сообщением.")
+
+    data = await state.get_data()
+    ticket_id, user_id = data.get("support_ticket"), data.get("support_user")
+    if not ticket_id or not user_id:
+        await state.clear()
+        return await message.answer("Не понял, на какое обращение отвечаем. Откройте его заново.")
+
+    who = admin_name(message.from_user)
+    # Занимаем обращение до отправки: пока этот админ печатал, ответить мог другой.
+    if not await db.claim_ticket(ticket_id, message.from_user.id, who, text):
+        ticket = await db.get_ticket(ticket_id)
+        await state.clear()
+        return await message.answer(
+            f"Опоздали: на обращение №{ticket_id} уже ответил {ticket['answered_name']}.")
+
+    language = await db.get_language(user_id) or DEFAULT_LANGUAGE
+    try:
+        await bot.send_message(user_id, t(language, "support_answer", text=text), parse_mode="HTML")
+    except Exception as error:
+        # чаще всего клиент заблокировал бота: обращение снова свободно для других админов
+        await db.release_ticket(ticket_id)
+        logger.warning("ответ по обращению %s не доставлен: %s", ticket_id, error)
+        await state.clear()
+        return await message.answer(f"Не удалось отправить: {error}")
+
+    await state.clear()
+    logger.info("админ %s ответил на обращение %s", message.from_user.id, ticket_id)
+
+    card_id = data.get("support_card")
+    if card_id:
+        try:
+            await bot.edit_message_reply_markup(chat_id=message.chat.id, message_id=card_id,
+                                                reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+    await message.answer(f"Ответ по обращению <b>№{ticket_id}</b> отправлен ✅\n"
+                         f"Другие админы ответить на него уже не смогут.",
+                         parse_mode="HTML", reply_markup=main_keyboard())

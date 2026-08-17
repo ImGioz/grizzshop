@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
-# Выкатка на Oracle: коммит -> push -> pull на сервере -> рестарт.
+# Выкатка GrizzShop: коммит -> push -> pull на сервере -> рестарт.
 #
-#   ./deploy.sh "поправил цены на премиум"
-#   ./deploy.sh                              # если уже закоммичено вручную
+#   ./deploy.sh "поправил цены"
+#   ./deploy.sh                    # если уже закоммичено вручную
 #
-# Требует алиас `shop` в ~/.ssh/config.
+# Требует алиас `grizz` в ~/.ssh/config и первичную настройку сервера — см. DEPLOY.md.
 
 set -euo pipefail
 
-SERVER=shop
-REMOTE_DIR='~/xar1zmashop'
-SERVICE=xar1zma-shop
+SERVER=grizz
+REMOTE_DIR='~/grizzshop'
+SERVICE=grizzshop
 
 cd "$(dirname "$0")"
-
-# Свежая копия базы до выкатки: если новый код испортит данные, будет к чему откатиться.
-./backup.sh
 
 if [[ -n "$(git status --porcelain)" ]]; then
     if [[ $# -eq 0 ]]; then
@@ -32,11 +29,9 @@ fi
 git push -q origin main
 echo "запушено"
 
-# -A пробрасывает ключ с макбука: у сервера своего доступа к приватному репозиторию нет,
-# и заводить его там не нужно — ключ живёт только здесь.
+# -A пробрасывает ключ с макбука: у сервера своего доступа к приватному репозиторию нет.
 # Рестарт отдельной командой после pull: если pull упадёт, бот продолжит работать на старом коде.
-# pip перед рестартом: иначе коммит с новой зависимостью роняет бота, и поднять его
-# получается только вторым заходом.
+# pip перед рестартом: иначе коммит с новой зависимостью роняет бота при старте.
 ssh -A "$SERVER" "cd $REMOTE_DIR && git pull -q && venv/bin/pip install -q -r requirements.txt && systemctl restart $SERVICE"
 sleep 6
 

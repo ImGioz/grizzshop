@@ -15,7 +15,6 @@ KEY_PAYMENT_TOLERANCE = "payment_tolerance"
 KEY_AUTO_DELIVERY = "auto_delivery"
 KEY_PDF_AUTO_LIMIT = "pdf_auto_limit"
 KEY_TEST_MODE = "test_mode"
-KEY_NFT_MARKUP = "nft_markup"
 # Момент включения обязательных отзывов; заказы старше него ничего не требуют.
 KEY_REVIEW_SINCE = "review_required_since"
 
@@ -81,16 +80,6 @@ def test_mode() -> bool:
     """Dry run: verify receipts and report the result, but never charge or deliver."""
     stored = _overrides.get(KEY_TEST_MODE)
     return config.TEST_MODE if stored is None else stored == "1"
-
-
-def nft_markup_percent() -> Decimal:
-    """Наценка на подарки поверх цены маркета, в процентах.
-
-    Читается при каждом расчёте цены, а не один раз при импорте: иначе смена наценки в
-    админке доходила бы до клиентов только после перезапуска бота.
-    """
-    stored = _overrides.get(KEY_NFT_MARKUP)
-    return Decimal(stored) if stored is not None else config.NFT_MARKUP_PERCENT
 
 
 def masked_card() -> str:

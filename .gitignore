@@ -1,6 +1,5 @@
 .env
 cookies.json
-portals_auth.json
 created_wallets/
 shop.db
 venv/

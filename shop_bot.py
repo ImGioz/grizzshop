@@ -32,23 +32,6 @@ async def expire_orders_periodically(interval_seconds: int = 60):
         await asyncio.sleep(interval_seconds)
 
 
-async def refresh_nft_prices(bot: Bot, interval_seconds: int = 1800):
-    """Keep the stock showcase instant: prices are refreshed here, never while a customer waits."""
-    from shop import nft_stock, price_cache
-
-    while True:
-        try:
-            gifts = await nft_stock.available(bot)
-            if gifts:
-                updated = await price_cache.warm(gifts)
-                logger.info("nft prices refreshed for %s gifts", updated)
-        except nft_stock.StockError as error:
-            logger.debug("nft price refresh skipped: %s", error)
-        except Exception:
-            logger.exception("nft price refresh failed")
-        await asyncio.sleep(interval_seconds)
-
-
 async def main():
     problems = config.validate()
     if problems:
@@ -76,13 +59,12 @@ async def main():
     dispatcher.include_router(router)
 
     janitor = asyncio.create_task(expire_orders_periodically())
-    pricer = asyncio.create_task(refresh_nft_prices(bot))
-    logger.info("shop bot started, admins: %s", sorted(config.ADMIN_IDS))
+    logger.info("shop bot started, база %s, админы: .env %s + панель %s",
+                config.DB_PATH, sorted(config.ADMIN_IDS), sorted(await db.admin_ids()))
     try:
         await dispatcher.start_polling(bot)
     finally:
         janitor.cancel()
-        pricer.cancel()
 
 
 if __name__ == "__main__":

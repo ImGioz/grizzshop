@@ -1,9 +1,9 @@
-"""Inline and reply keyboards."""
+"""Inline keyboards."""
 
-from aiogram.types import (InlineKeyboardButton, InlineKeyboardMarkup,
-                           KeyboardButton, ReplyKeyboardMarkup)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from shop.config import CHANNEL_URL, MIN_STARS
+from shop import projects
+from shop.config import CHANNEL_URL, MIN_STARS, REVIEWS_CHANNEL_URL
 from shop.prices import PREMIUM_PRICES, STAR_PRICES, star_price
 from shop.texts import t
 
@@ -21,24 +21,34 @@ def subscription_keyboard(language: str) -> InlineKeyboardMarkup:
     ])
 
 
-def main_menu(language: str) -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=t(language, "menu_stars")), KeyboardButton(text=t(language, "menu_premium"))],
-            [KeyboardButton(text=t(language, "menu_gram")), KeyboardButton(text=t(language, "menu_nft"))],
-            [KeyboardButton(text=t(language, "menu_calculator"))],
-            # alone in its row, so Telegram stretches it across the full width
-            [KeyboardButton(text=t(language, "menu_profile"))],
-        ],
-        resize_keyboard=True,
-    )
+def main_menu(language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(language, "menu_stars"), callback_data="menu:stars"),
+         InlineKeyboardButton(text=t(language, "menu_premium"), callback_data="menu:premium")],
+        [InlineKeyboardButton(text=t(language, "menu_gram"), callback_data="menu:gram"),
+         InlineKeyboardButton(text=t(language, "menu_calculator"), callback_data="menu:calc")],
+        [InlineKeyboardButton(text=t(language, "menu_more"), callback_data="menu:more")],
+        # alone in its row, so Telegram stretches it across the full width
+        [InlineKeyboardButton(text=t(language, "menu_profile"), callback_data="menu:profile")],
+    ])
+
+
+def home_row(language: str) -> list[InlineKeyboardButton]:
+    """Возврат в главное меню. Нижней строкой на каждом экране, куда из меню уходят."""
+    return [InlineKeyboardButton(text=t(language, "menu_main"), callback_data="menu:home")]
+
+
+def home_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Для экранов, которые ждут ввода текстом и своих кнопок не имеют."""
+    return InlineKeyboardMarkup(inline_keyboard=[home_row(language)])
 
 
 def recipient_keyboard(language: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(language, "for_myself"), callback_data="who:self"),
-        InlineKeyboardButton(text=t(language, "for_friend"), callback_data="who:friend"),
-    ]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(language, "for_myself"), callback_data="who:self"),
+         InlineKeyboardButton(text=t(language, "for_friend"), callback_data="who:friend")],
+        home_row(language),
+    ])
 
 
 def quantity_keyboard(language: str) -> InlineKeyboardMarkup:
@@ -49,6 +59,7 @@ def quantity_keyboard(language: str) -> InlineKeyboardMarkup:
     # the tier list is long, so two per row keeps it readable
     rows = [buttons[index:index + 2] for index in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text=t(language, "custom_quantity"), callback_data="qty:custom")])
+    rows.append(home_row(language))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -56,12 +67,14 @@ def calculator_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(language, "calc_to_uah"), callback_data="calc:to_uah")],
         [InlineKeyboardButton(text=t(language, "calc_to_stars"), callback_data="calc:to_stars")],
+        home_row(language),
     ])
 
 
 def calculator_again_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=t(language, "calc_again"), callback_data="calc:menu")],
+        home_row(language),
     ])
 
 
@@ -70,42 +83,39 @@ def months_keyboard(language: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=t(language, "months_label", months=months, price=price),
                               callback_data=f"months:{months}")]
         for months, price in sorted(PREMIUM_PRICES.items())
-    ])
+    ] + [home_row(language)])
 
 
-def nft_type_keyboard(language: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=t(language, "nft_market"), callback_data="nft:market"),
-        InlineKeyboardButton(text=t(language, "nft_from_list"), callback_data="nft:list"),
-    ]])
+def more_keyboard(language: str) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(text=t(language, "menu_support"), callback_data="more:support")],
+            [InlineKeyboardButton(text=t(language, "menu_projects"), callback_data="more:projects")]]
+    # без публичной ссылки кнопка была бы битой, поэтому её просто нет
+    if REVIEWS_CHANNEL_URL:
+        rows.insert(0, [InlineKeyboardButton(text=t(language, "menu_reviews"),
+                                             url=REVIEWS_CHANNEL_URL)])
+    rows.append(home_row(language))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def nft_confirm_keyboard(language: str) -> InlineKeyboardMarkup:
+def projects_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t(language, "nft_make_order"), callback_data="nft:order")],
-        [InlineKeyboardButton(text=t(language, "nft_cancel_order"), callback_data="nft:drop")],
-    ])
+        [InlineKeyboardButton(text=projects.title(key, language), callback_data=f"proj:{key}")]
+        for key in projects.CATEGORIES
+    ] + [home_row(language)])
 
 
-def stock_keyboard(gifts) -> InlineKeyboardMarkup:
+def project_category_keyboard(language: str, key: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"{gift.title} — {gift.price_uah} грн",
-                              callback_data=f"nft:take:{gift.owned_gift_id}")]
-        for gift in gifts
-    ])
-
-
-def nft_buy_keyboard(language: str, owned_gift_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t(language, "nft_buy"), callback_data=f"nft:buy:{owned_gift_id}")],
-        [InlineKeyboardButton(text=t(language, "nft_decline"), callback_data="nft:decline")],
-    ])
+        [InlineKeyboardButton(text=label, url=url)]
+        for label, url in projects.items(key, language)
+    ] + [[InlineKeyboardButton(text=t(language, "projects_back"), callback_data="more:projects")],
+         home_row(language)])
 
 
 def product_label(language: str, product: str, quantity: int, details: str | None = None) -> str:
     if product == "test":
         return details or "тестовая оплата"
-    if product in ("nft", "nft_stock"):
+    if product in ("nft", "nft_stock"):   # продажа NFT убрана, остались прошлые заказы
         return t(language, "product_nft", details=details or "—")
     if product == "gram":
         # gram quantities are stored in nanotons
