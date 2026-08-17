@@ -9,6 +9,7 @@
 set -euo pipefail
 
 SERVER=grizz
+REMOTE=grizzshop
 REMOTE_DIR='~/grizzshop'
 SERVICE=grizzshop
 
@@ -26,8 +27,9 @@ if [[ -n "$(git status --porcelain)" ]]; then
     echo "коммит: $(git log --oneline -1)"
 fi
 
-git push -q origin main
-echo "запушено"
+# origin остаётся у Xar1zma, GrizzShop живёт в отдельном репозитории
+git push -q "$REMOTE" main
+echo "запушено в $REMOTE"
 
 # -A пробрасывает ключ с макбука: у сервера своего доступа к приватному репозиторию нет.
 # Рестарт отдельной командой после pull: если pull упадёт, бот продолжит работать на старом коде.
