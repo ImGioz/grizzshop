@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS orders (
     recipient     TEXT NOT NULL,              -- @username of the receiver
     quantity      INTEGER NOT NULL,
     price         TEXT NOT NULL,              -- Decimal as text, UAH
-    status        TEXT NOT NULL,              -- pending|awaiting_check|paid|delivered|failed|expired
+    status        TEXT NOT NULL,              -- pending|awaiting_check|paid|delivered|failed|expired|cancelled
     payment_method TEXT,
     sender_name   TEXT,
     receipt_id    TEXT,
@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS orders (
     cost_uah      TEXT,                       -- what the delivery actually cost us, UAH
     created_at    TEXT NOT NULL,
     paid_at       TEXT,
+    closed_at     TEXT,                       -- when the order was cancelled or expired
     FOREIGN KEY (user_id) REFERENCES users (user_id)
 );
 
@@ -117,6 +118,7 @@ class Order:
     cost_uah: Decimal | None
     created_at: datetime
     paid_at: datetime | None
+    closed_at: datetime | None
 
     @classmethod
     def from_row(cls, row):
@@ -138,6 +140,7 @@ class Order:
             cost_uah=Decimal(row["cost_uah"]) if row["cost_uah"] else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             paid_at=datetime.fromisoformat(row["paid_at"]) if row["paid_at"] else None,
+            closed_at=datetime.fromisoformat(row["closed_at"]) if row["closed_at"] else None,
         )
 
 
@@ -182,6 +185,10 @@ async def init():
         cursor = await connection.execute("PRAGMA table_info(orders)")
         if "cost_uah" not in {row["name"] for row in await cursor.fetchall()}:
             await connection.execute("ALTER TABLE orders ADD COLUMN cost_uah TEXT")
+
+        cursor = await connection.execute("PRAGMA table_info(orders)")
+        if "closed_at" not in {row["name"] for row in await cursor.fetchall()}:
+            await connection.execute("ALTER TABLE orders ADD COLUMN closed_at TEXT")
 
         cursor = await connection.execute("PRAGMA table_info(users)")
         if "blocked" not in {row["name"] for row in await cursor.fetchall()}:
@@ -262,6 +269,16 @@ async def update_order(order_id: int, **fields):
         await connection.commit()
 
 
+async def close_order(order_id: int, status: str) -> None:
+    """Отмена или просрочка заказа.
+
+    Момент закрытия пишется отдельной колонкой: по нему админка решает, можно ли ещё выдать
+    заказ вручную. По created_at это не посчитать — неоплаченный заказ живёт до просрочки
+    ровно ORDER_TIMEOUT_MINUTES, и к моменту закрытия он всегда «старый».
+    """
+    await update_order(order_id, status=status, closed_at=_now())
+
+
 async def delete_order(order_id: int) -> bool:
     """Remove an order outright. Only used for cancellation, before any payment is claimed."""
     async with connect() as connection:
@@ -298,7 +315,9 @@ async def expire_stale_orders(timeout_minutes: int) -> list[int]:
 
         if stale:
             placeholders = ", ".join("?" * len(stale))
-            await connection.execute(f"UPDATE orders SET status = 'expired' WHERE id IN ({placeholders})", stale)
+            await connection.execute(
+                f"UPDATE orders SET status = 'expired', closed_at = ? WHERE id IN ({placeholders})",
+                (_now(), *stale))
             await connection.commit()
         return stale
 

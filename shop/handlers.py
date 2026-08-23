@@ -1000,7 +1000,7 @@ async def cancel_order(callback: CallbackQuery, state: FSMContext):
 
     # Kept, not deleted: a customer may pay right after cancelling, and a payment whose order
     # no longer exists cannot be matched to anything — the money just sits on the wallet.
-    await db.update_order(order_id, status="cancelled")
+    await db.close_order(order_id, "cancelled")
     await state.clear()
     logger.info("order %s cancelled by user %s", order_id, callback.from_user.id)
 

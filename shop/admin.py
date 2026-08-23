@@ -46,6 +46,11 @@ PAGE_SIZE = 6
 UNDELIVERED = ("paid", "failed")
 REVIEW = ("review",)
 ACTIVE = ("pending", "awaiting_check")
+CLOSED = ("expired", "cancelled")
+
+# Сколько после отмены заказ ещё можно выдать вручную: человек нередко платит сразу после
+# того, как заказ отвалился по таймауту, и админ должен успеть закрыть это руками.
+LATE_DELIVERY_MINUTES = 30
 
 STATUS_LABELS = {
     "pending": "🕐 создан",
@@ -126,6 +131,22 @@ FILTER_TITLES = {
 }
 
 
+def late_window_left(order) -> timedelta:
+    """Сколько ещё можно выдать закрытый заказ. Отрицательное значение — окно прошло."""
+    closed = order.closed_at or order.created_at
+    if closed.tzinfo is None:
+        closed = closed.replace(tzinfo=timezone.utc)
+    return timedelta(minutes=LATE_DELIVERY_MINUTES) - (datetime.now(timezone.utc) - closed)
+
+
+def deliverable_by_hand(order) -> bool:
+    """Заказ без оплаты, который админ всё же может выдать: активный — всегда, отменённый —
+    первые LATE_DELIVERY_MINUTES минут после закрытия."""
+    if order.status in ACTIVE:
+        return True
+    return order.status in CLOSED and late_window_left(order) > timedelta(0)
+
+
 def order_product(order) -> str:
     """Stars, months or nanotons all live in `quantity`, so never print it raw."""
     return product_label(ADMIN_LANGUAGE, order.product, order.quantity, order.details)
@@ -193,6 +214,9 @@ def order_card_keyboard(order) -> InlineKeyboardMarkup:
                      button("❌ Отклонить", "orders", "reject", order.id)])
     if order.status in ACTIVE:
         rows.append([button("🚫 Отменить заказ", "orders", "cancel", order.id)])
+    if order.status not in UNDELIVERED and deliverable_by_hand(order):
+        # оплаты по этому заказу нет, поэтому надпись другая: выдача здесь — подарок за счёт магазина
+        rows.append([button("🚀 Выдать без оплаты", "orders", "deliver", order.id)])
     rows.append([button("⬅️ К списку", "orders", "list", "all", 0),
                  button("🏠 В меню", "menu", "show")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -223,6 +247,12 @@ async def order_card_text(order) -> str:
         lines.append(f"Квитанция: <code>{order.receipt_id}</code>")
     if order.paid_at:
         lines.append(f"Оплачен: {localtime.stamp(order.paid_at)}")
+    if order.closed_at:
+        lines.append(f"Закрыт: {localtime.stamp(order.closed_at)}")
+    if order.status in CLOSED:
+        left = late_window_left(order)
+        lines.append(f"Ручная выдача: ещё {int(left.total_seconds() // 60)} мин"
+                     if left > timedelta(0) else "Ручная выдача: окно закрыто")
     return "\n".join(lines)
 
 
@@ -239,7 +269,10 @@ async def deliver_order(callback: CallbackQuery, bot: Bot):
     order = await db.get_order(int(callback.data.split(":")[-1]))
     if not order:
         return await callback.answer("Заказ не найден", show_alert=True)
-    if order.status not in UNDELIVERED:
+    if order.status in CLOSED and not deliverable_by_hand(order):
+        return await callback.answer(
+            f"Заказ закрыт больше {LATE_DELIVERY_MINUTES} мин назад, выдать уже нельзя", show_alert=True)
+    if order.status not in UNDELIVERED and not deliverable_by_hand(order):
         return await callback.answer(f"Статус {order.status}, выдача не требуется", show_alert=True)
 
     await callback.answer("Выдаю...")
@@ -283,7 +316,7 @@ async def mark_delivered(callback: CallbackQuery):
 @router.callback_query(F.data.startswith("adm:orders:cancel:"))
 async def cancel_order(callback: CallbackQuery):
     order_id = int(callback.data.split(":")[-1])
-    await db.update_order(order_id, status="expired")
+    await db.close_order(order_id, "expired")
     order = await db.get_order(order_id)
     await callback.answer("Заказ отменён")
     await render(callback, await order_card_text(order), order_card_keyboard(order))
