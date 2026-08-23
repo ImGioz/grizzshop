@@ -64,16 +64,36 @@ def quantity_keyboard(language: str) -> InlineKeyboardMarkup:
 
 
 def calculator_keyboard(language: str) -> InlineKeyboardMarkup:
+    """Первый экран калькулятора: что считаем — звёзды или TON."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t(language, "calc_to_uah"), callback_data="calc:to_uah")],
-        [InlineKeyboardButton(text=t(language, "calc_to_stars"), callback_data="calc:to_stars")],
+        [InlineKeyboardButton(text=t(language, "calc_pick_stars"), callback_data="calc:stars"),
+         InlineKeyboardButton(text=t(language, "calc_pick_ton"), callback_data="calc:ton")],
         home_row(language),
     ])
 
 
-def calculator_again_keyboard(language: str) -> InlineKeyboardMarkup:
+def stars_calculator_keyboard(language: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=t(language, "calc_again"), callback_data="calc:menu")],
+        [InlineKeyboardButton(text=t(language, "calc_to_uah"), callback_data="calc:to_uah")],
+        [InlineKeyboardButton(text=t(language, "calc_to_stars"), callback_data="calc:to_stars")],
+        [InlineKeyboardButton(text=t(language, "calc_back"), callback_data="calc:menu")],
+        home_row(language),
+    ])
+
+
+def ton_calculator_keyboard(language: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(language, "calc_ton_to_uah"), callback_data="calc:ton_to_uah")],
+        [InlineKeyboardButton(text=t(language, "calc_to_ton"), callback_data="calc:to_ton")],
+        [InlineKeyboardButton(text=t(language, "calc_back"), callback_data="calc:menu")],
+        home_row(language),
+    ])
+
+
+def calculator_again_keyboard(language: str, section: str) -> InlineKeyboardMarkup:
+    """`section` — «stars» или «ton»: «Посчитать ещё» возвращает в тот же калькулятор."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t(language, "calc_again"), callback_data=f"calc:{section}")],
         home_row(language),
     ])
 

@@ -132,7 +132,20 @@ def premium_price(months: int) -> Decimal:
     return PREMIUM_PRICES[months]
 
 
-def gram_price(nanotons: int) -> Decimal:
+def ton_price(tons: Decimal) -> Decimal:
     """Cost of a TON amount, rounded up to whole hryvnia."""
-    exact = (Decimal(nanotons) / Decimal(10 ** 9)) * TON_PRICE_UAH
-    return exact.quantize(Decimal("1"), rounding=ROUND_CEILING)
+    return (Decimal(tons) * TON_PRICE_UAH).quantize(Decimal("1"), rounding=ROUND_CEILING)
+
+
+def ton_for_budget(amount: Decimal) -> Decimal:
+    """Most TON actually buyable for `amount`.
+
+    Rounded down: ton_price rounds the hryvnia up, so the plain division quotes slightly
+    more TON than the budget really covers.
+    """
+    return (Decimal(amount) / TON_PRICE_UAH).quantize(Decimal("0.0001"), rounding=ROUND_FLOOR)
+
+
+def gram_price(nanotons: int) -> Decimal:
+    """Same price, for the amounts stored in orders as nanotons."""
+    return ton_price(Decimal(nanotons) / Decimal(10 ** 9))

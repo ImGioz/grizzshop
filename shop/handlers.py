@@ -33,9 +33,11 @@ from shop.keyboards import (calculator_again_keyboard, calculator_keyboard,
                             projects_keyboard,
                             payment_method_keyboard, product_label,
                             quantity_keyboard, recipient_keyboard, retry_keyboard,
-                            subscription_keyboard)
+                            stars_calculator_keyboard, subscription_keyboard,
+                            ton_calculator_keyboard)
 from shop.prices import (GRAM_ENABLED, MIN_TON, PREMIUM_ENABLED,
-                         gram_price, premium_price, star_price, star_rate, stars_for_budget)
+                         gram_price, premium_price, star_price, star_rate, stars_for_budget,
+                         ton_for_budget, ton_price)
 from shop.texts import DEFAULT_LANGUAGE, t
 
 logger = logging.getLogger(__name__)
@@ -52,6 +54,8 @@ MAIN_MENU_PHOTOS = {"ru": BASE_DIR / "mainmenu.jpg", "uk": BASE_DIR / "mainmenuu
 class Calculator(StatesGroup):
     stars = State()
     uah = State()
+    ton = State()
+    ton_uah = State()
 
 
 class Support(StatesGroup):
@@ -455,7 +459,7 @@ async def calculate_to_uah(message: Message, state: FSMContext):
         text += t(language, "calc_min_note", min_stars=MIN_STARS)
 
     await state.clear()
-    await message.answer(text, parse_mode="HTML", reply_markup=calculator_again_keyboard(language))
+    await message.answer(text, parse_mode="HTML", reply_markup=calculator_again_keyboard(language, "stars"))
 
 
 @router.message(Calculator.uah)
@@ -476,7 +480,74 @@ async def calculate_to_stars(message: Message, state: FSMContext):
         text += t(language, "calc_min_note", min_stars=MIN_STARS)
 
     await state.clear()
-    await message.answer(text, parse_mode="HTML", reply_markup=calculator_again_keyboard(language))
+    await message.answer(text, parse_mode="HTML", reply_markup=calculator_again_keyboard(language, "stars"))
+
+
+@router.callback_query(F.data == "calc:stars")
+async def calculator_stars(callback: CallbackQuery, state: FSMContext):
+    language = await language_of(callback.from_user.id)
+    await state.clear()
+    await callback.answer()
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "calc_stars_title"), parse_mode="HTML",
+                                  reply_markup=stars_calculator_keyboard(language))
+
+
+@router.callback_query(F.data == "calc:ton")
+async def calculator_ton(callback: CallbackQuery, state: FSMContext):
+    language = await language_of(callback.from_user.id)
+    await state.clear()
+    await callback.answer()
+    await drop_message(callback.message)
+    await callback.message.answer(t(language, "calc_ton_title"), parse_mode="HTML",
+                                  reply_markup=ton_calculator_keyboard(language))
+
+
+@router.callback_query(F.data.in_({"calc:ton_to_uah", "calc:to_ton"}))
+async def calculator_ton_direction(callback: CallbackQuery, state: FSMContext):
+    language = await language_of(callback.from_user.id)
+    to_uah = callback.data.endswith("ton_to_uah")
+
+    await state.set_state(Calculator.ton if to_uah else Calculator.ton_uah)
+    await callback.answer()
+    await callback.message.edit_text(t(language, "calc_ask_ton" if to_uah else "calc_ask_uah"),
+                                     reply_markup=home_keyboard(language))
+
+
+@router.message(Calculator.ton)
+async def calculate_ton_to_uah(message: Message, state: FSMContext):
+    language = await language_of(message.from_user.id)
+    amount = _positive_number(message.text)
+    if amount is None:
+        return await message.answer(t(language, "calc_bad_number"))
+
+    # курс читается через модуль: правка из админки меняет его на лету
+    text = t(language, "calc_result_ton_to_uah", amount=f"{amount:g}", price=ton_price(amount),
+             rate=prices.TON_PRICE_UAH)
+    if amount < MIN_TON:
+        text += t(language, "calc_min_note_ton", min_ton=MIN_TON)
+
+    await state.clear()
+    await message.answer(text, parse_mode="HTML",
+                         reply_markup=calculator_again_keyboard(language, "ton"))
+
+
+@router.message(Calculator.ton_uah)
+async def calculate_to_ton(message: Message, state: FSMContext):
+    language = await language_of(message.from_user.id)
+    amount = _positive_number(message.text)
+    if amount is None:
+        return await message.answer(t(language, "calc_bad_number"))
+
+    quantity = ton_for_budget(amount)
+    text = t(language, "calc_result_to_ton", amount=f"{amount:g}", quantity=f"{quantity:g}",
+             rate=prices.TON_PRICE_UAH)
+    if quantity < MIN_TON:
+        text += t(language, "calc_min_note_ton", min_ton=MIN_TON)
+
+    await state.clear()
+    await message.answer(text, parse_mode="HTML",
+                         reply_markup=calculator_again_keyboard(language, "ton"))
 
 
 @router.callback_query(F.data == "menu:profile")
