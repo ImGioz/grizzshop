@@ -1208,14 +1208,24 @@ def skip_keyboard(language: str, step: str) -> InlineKeyboardMarkup:
     ])
 
 
-async def ask_for_review(message: Message, state: FSMContext, order, language: str):
-    """Offered right after a successful delivery; ignoring it simply leaves no review."""
+async def ask_for_review_in_chat(bot: Bot, user_id: int, state: FSMContext, order, language: str):
+    """Спросить оценку в чате покупателя.
+
+    Отдельно от ask_for_review, потому что заказ мог выдать админ из панели: там и чат, и
+    состояние принадлежат админу, а спрашивать надо у того, кто покупал.
+    """
     if await db.has_review(order.id):
         return
     await state.set_state(None)
     await state.update_data(review_order_id=order.id, review_stars=order.quantity,
                             review_product=order.product, review_details=order.details)
-    await message.answer(t(language, "review_ask_rating"), reply_markup=rating_keyboard(language))
+    await bot.send_message(user_id, t(language, "review_ask_rating"),
+                           reply_markup=rating_keyboard(language))
+
+
+async def ask_for_review(message: Message, state: FSMContext, order, language: str):
+    """Offered right after a successful delivery; ignoring it simply leaves no review."""
+    await ask_for_review_in_chat(message.bot, message.chat.id, state, order, language)
 
 
 @router.callback_query(F.data.startswith("rev:rate:"))

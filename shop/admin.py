@@ -9,7 +9,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 
-from aiogram import Bot, F, Router
+from aiogram import Bot, Dispatcher, F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -264,8 +264,24 @@ async def order_card(callback: CallbackQuery):
     await render(callback, await order_card_text(order), order_card_keyboard(order))
 
 
+async def request_review(bot: Bot, dispatcher: Dispatcher, order) -> None:
+    """Попросить оценку у покупателя после выдачи из панели.
+
+    Без этого заказ, выданный руками, оставался без отзыва до следующего захода клиента в
+    меню: там его ловит review_debt, но между выдачей и заходом могут пройти дни.
+    """
+    from shop.handlers import ask_for_review_in_chat
+
+    language = await db.get_language(order.user_id) or DEFAULT_LANGUAGE
+    state = dispatcher.fsm.get_context(bot, chat_id=order.user_id, user_id=order.user_id)
+    try:
+        await ask_for_review_in_chat(bot, order.user_id, state, order, language)
+    except Exception:
+        logger.warning("не удалось попросить отзыв у %s по заказу %s", order.user_id, order.id)
+
+
 @router.callback_query(F.data.startswith("adm:orders:deliver:"))
-async def deliver_order(callback: CallbackQuery, bot: Bot):
+async def deliver_order(callback: CallbackQuery, bot: Bot, dispatcher: Dispatcher):
     order = await db.get_order(int(callback.data.split(":")[-1]))
     if not order:
         return await callback.answer("Заказ не найден", show_alert=True)
@@ -302,6 +318,8 @@ async def deliver_order(callback: CallbackQuery, bot: Bot):
                                f"Ваш заказ #{order.id} выдан: {order_product(order)} → {order_target(order)}")
     except Exception:
         logger.warning("cannot notify buyer %s about order %s", order.user_id, order.id)
+
+    await request_review(bot, dispatcher, delivered)
 
 
 @router.callback_query(F.data.startswith("adm:orders:mark:"))
@@ -740,7 +758,7 @@ async def show_receipt(callback: CallbackQuery, bot: Bot):
 
 
 @router.callback_query(F.data.startswith("adm:orders:approve:"))
-async def approve_order(callback: CallbackQuery, bot: Bot):
+async def approve_order(callback: CallbackQuery, bot: Bot, dispatcher: Dispatcher):
     order = await db.get_order(int(callback.data.split(":")[-1]))
     if not order:
         return await callback.answer("Заказ не найден", show_alert=True)
@@ -748,7 +766,7 @@ async def approve_order(callback: CallbackQuery, bot: Bot):
         return await callback.answer(f"Статус {order.status}, подтверждение не нужно", show_alert=True)
 
     await db.update_order(order.id, status="paid")
-    await deliver_order(callback, bot)  # answers the callback itself
+    await deliver_order(callback, bot, dispatcher)  # answers the callback itself
 
 
 @router.callback_query(F.data.startswith("adm:orders:reject:"))
