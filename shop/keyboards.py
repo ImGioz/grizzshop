@@ -3,7 +3,7 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from shop import projects
-from shop.config import CHANNEL_URL, DEVELOPER_URL, MIN_STARS, REVIEWS_CHANNEL_URL
+from shop.config import CHANNEL_URL, MIN_STARS, REVIEWS_CHANNEL_URL
 from shop.prices import PREMIUM_PRICES, STAR_PRICES, star_price
 from shop.texts import t
 
@@ -113,7 +113,6 @@ def more_keyboard(language: str) -> InlineKeyboardMarkup:
     if REVIEWS_CHANNEL_URL:
         rows.insert(0, [InlineKeyboardButton(text=t(language, "menu_reviews"),
                                              url=REVIEWS_CHANNEL_URL)])
-    rows.append([InlineKeyboardButton(text=t(language, "menu_developer"), url=DEVELOPER_URL)])
     rows.append(home_row(language))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 

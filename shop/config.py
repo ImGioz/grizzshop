@@ -23,9 +23,8 @@ ADMIN_IDS = _int_set("ADMIN_IDS")
 CHANNEL_ID = os.getenv("CHANNEL_ID", "@XAR1ZMA_SHOP")
 CHANNEL_URL = os.getenv("CHANNEL_URL", "https://t.me/XAR1ZMA_SHOP")
 
-# Автор бота: показывается в профиле и отдельной кнопкой в разделе «Ещё».
+# Автор бота: показывается строкой в профиле.
 DEVELOPER_USERNAME = os.getenv("DEVELOPER_USERNAME", "zheka_en").lstrip("@")
-DEVELOPER_URL = f"https://t.me/{DEVELOPER_USERNAME}"
 
 # Card the customer transfers to. CARD_HOLDER is shown in the payment details.
 CARD_NUMBER = os.getenv("CARD_NUMBER", "")
