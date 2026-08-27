@@ -23,7 +23,7 @@ from shop import projects
 from shop import referrals
 from shop import reviews
 from shop import runtime
-from shop.config import BASE_DIR, CHANNEL_ID, MIN_STARS
+from shop.config import BASE_DIR, CHANNEL_ID, DEVELOPER_USERNAME, MIN_STARS
 from shop.delivery import (DeliveryError, check_recipient, deliver_gram, deliver_stars,
                            parse_ton_address)
 from shop.keyboards import (calculator_again_keyboard, calculator_keyboard,
@@ -562,7 +562,8 @@ async def menu_profile(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await drop_message(callback.message)
     await callback.message.answer(
         t(language, "profile", user_id=callback.from_user.id, username=username,
-          language=language, paid_orders=paid_orders, total_stars=total_stars),
+          language=language, paid_orders=paid_orders, total_stars=total_stars,
+          developer=DEVELOPER_USERNAME),
         parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text=t(language, "menu_referral"), callback_data="ref:show")],
