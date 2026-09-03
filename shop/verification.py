@@ -56,11 +56,6 @@ def cards_match(receipt_card: str | None, our_card: str | None = None) -> bool:
     return receipt_digits[-4:] == our_digits[-4:]
 
 
-# TEMPORARY (test mode): every PDF is accepted as valid payment, no matching against the
-# order is performed. Set back to False to restore the real checks below.
-DISABLE_PDF_VERIFICATION = True
-
-
 def verify_pdf(receipt, order: Order, tolerance_minutes: int | None = None) -> VerificationResult:
     """Match a PDF against an order by looking for the values we already expect to see."""
     if tolerance_minutes is None:
@@ -77,11 +72,6 @@ def verify_pdf(receipt, order: Order, tolerance_minutes: int | None = None) -> V
     logger.info("verifying order %s against a PDF", order.id)
     logger.info("  expect amount=%s last4=%s payer=%r window=±%s min",
                 expected, last4, order.sender_name, tolerance_minutes)
-
-    if DISABLE_PDF_VERIFICATION:
-        moment = receipt.dates[0] if receipt.dates else created_at
-        logger.warning("  -> ACCEPTED without verification (test mode), order %s", order.id)
-        return VerificationResult(True, details={"amount": expected, "moment": moment, "last4": last4})
 
     def fail(reason, **details):
         logger.warning("  -> REJECTED: %s %s", reason, details or "")
