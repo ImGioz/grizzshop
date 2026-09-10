@@ -945,6 +945,293 @@ bot.onText(/^\/stats/, async (msg) => {
 });
 
 // ============================================================
+// АДМІН-ПАНЕЛЬ: /admin
+// ============================================================
+bot.onText(/^\/admin(?:\s+(.+))?/, async (msg, match) => {
+  if (!isAdminMessage(msg)) return;
+
+  const args = match[1] ? match[1].trim() : '';
+
+  // Якщо нема аргументів — показуємо головне меню
+  if (!args) {
+    const snapshot = await get(ref(db, 'users'));
+    const all = snapshot.val() || {};
+    const total = Object.keys(all).length;
+    let blocked = 0;
+    const counts = {};
+
+    Object.values(all).forEach((u) => {
+      counts[u.state] = (counts[u.state] || 0) + 1;
+      if (u.blocked) blocked += 1;
+    });
+
+    const adminMenu = {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📊 Статистика', callback_data: 'admin_stats' }],
+          [{ text: '🔍 Пошук користувача', callback_data: 'admin_search' }],
+          [{ text: '👥 Всі користувачі', callback_data: 'admin_all_users' }],
+          [{ text: '🎁 Видати підписку', callback_data: 'admin_give_sub' }],
+          [{ text: '🚫 Заблокувати', callback_data: 'admin_block' }],
+          [{ text: '✅ Розблокувати', callback_data: 'admin_unblock' }],
+          [{ text: '📋 Довідка команд', callback_data: 'admin_help' }]
+        ]
+      }
+    };
+
+    const statsText = `🔧 <b>АДМІН-ПАНЕЛЬ</b>\n\n` +
+      `👥 Всього користувачів: ${total}\n` +
+      `🚫 Заблоковано: ${blocked}\n` +
+      `✅ Активні: ${counts['active'] || 0}\n` +
+      `⏳ На розгляді: ${counts['waiting_purpose'] || 0}\n` +
+      `✔️ Затверджені: ${counts['purpose_approved'] || 0}\n\n` +
+      `Виберіть дію:`;
+
+    bot.sendMessage(msg.chat.id, statsText, { ...adminMenu, parse_mode: 'HTML' });
+    return;
+  }
+
+  // Команди з аргументами
+  if (args.startsWith('user ')) {
+    const userId = parseInt(args.substring(5));
+    const user = await getUser(userId);
+    if (!user) return bot.sendMessage(msg.chat.id, '❌ Користувача не знайдено.');
+
+    const userInfo = `📋 <b>Інформація про користувача</b>\n\n` +
+      `🆔 ID: ${userId}\n` +
+      `👤 Ім'я: ${user.name || '—'}\n` +
+      `📧 Email: ${user.email || '—'}\n` +
+      `📞 Телефон: ${user.phone || '—'}\n` +
+      `🔐 Статус: ${user.state || '—'}\n` +
+      `💎 Підписка: ${user.subscriptionStatus || 'немає'}\n` +
+      `📅 Закінчується: ${user.subscriptionEndDate ? new Date(user.subscriptionEndDate).toLocaleDateString('uk-UA', { timeZone: KYIV_TZ }) : '—'}\n` +
+      `🚫 Заблокований: ${user.blocked ? '✅ Так' : '❌ Ні'}\n` +
+      `${user.blockReason ? `📝 Причина: ${user.blockReason}\n` : ''}` +
+      `⏰ Додано: ${user.createdAt ? new Date(user.createdAt).toLocaleDateString('uk-UA', { timeZone: KYIV_TZ }) : '—'}`;
+
+    bot.sendMessage(msg.chat.id, userInfo, { parse_mode: 'HTML' });
+    return;
+  }
+
+  bot.sendMessage(msg.chat.id, '❌ Невідома команда. Використовуйте /admin для меню.');
+});
+
+// Callback-обробники для админ-меню
+bot.on('callback_query', async (query) => {
+  if (query.from.id !== ADMIN_ID) {
+    return bot.answerCallbackQuery(query.id, { text: '❌ Доступ заборонено' });
+  }
+
+  const chatId = query.message.chat.id;
+
+  if (query.data === 'admin_stats') {
+    const snapshot = await get(ref(db, 'users'));
+    const all = snapshot.val() || {};
+    const counts = {};
+    let blocked = 0;
+
+    Object.values(all).forEach((u) => {
+      counts[u.state] = (counts[u.state] || 0) + 1;
+      if (u.blocked) blocked += 1;
+    });
+
+    const total = Object.keys(all).length;
+    const lines = Object.entries(counts).map(([state, n]) => `• ${state}: ${n}`).join('\n') || '—';
+
+    bot.editMessageText(`📊 <b>Статистика</b>\n\nВсього користувачів: ${total}\nЗаблоковано: ${blocked}\n\n${lines}`, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_search') {
+    userState[chatId] = 'admin_search_user';
+    bot.editMessageText('🔍 Введіть ID користувача:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_all_users') {
+    const snapshot = await get(ref(db, 'users'));
+    const all = snapshot.val() || {};
+    const userList = Object.entries(all)
+      .slice(0, 10)
+      .map(([id, u]) => `• ${id}: ${u.name || '—'} (${u.state})`)
+      .join('\n');
+
+    bot.editMessageText(`👥 <b>Перші 10 користувачів:</b>\n\n${userList || '—'}`, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_give_sub') {
+    userState[chatId] = 'admin_give_sub_id';
+    bot.editMessageText('🎁 Введіть ID користувача для видачі підписки:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_block') {
+    userState[chatId] = 'admin_block_id';
+    bot.editMessageText('🚫 Введіть ID користувача для блокування:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_unblock') {
+    userState[chatId] = 'admin_unblock_id';
+    bot.editMessageText('✅ Введіть ID користувача для розблокування:', {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_help') {
+    const helpText = `📋 <b>Команди адміністратора:</b>\n\n` +
+      `/stats — статистика користувачів\n` +
+      `/admin — головна панель\n` +
+      `/admin user <ID> — інформація про користувача\n` +
+      `/approve <ID> — затвердити користувача\n` +
+      `/reject <ID> [причина] — відхилити\n` +
+      `/block <ID> [причина] — заблокувати\n` +
+      `/unblock <ID> — розблокувати\n` +
+      `/givesub <ID> — видати підписку`;
+
+    bot.editMessageText(helpText, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: [[{ text: '🔙 Назад', callback_data: 'admin_back' }]] }
+    });
+
+  } else if (query.data === 'admin_back') {
+    const snapshot = await get(ref(db, 'users'));
+    const all = snapshot.val() || {};
+    const total = Object.keys(all).length;
+    let blocked = 0;
+    const counts = {};
+
+    Object.values(all).forEach((u) => {
+      counts[u.state] = (counts[u.state] || 0) + 1;
+      if (u.blocked) blocked += 1;
+    });
+
+    const adminMenu = {
+      inline_keyboard: [
+        [{ text: '📊 Статистика', callback_data: 'admin_stats' }],
+        [{ text: '🔍 Пошук користувача', callback_data: 'admin_search' }],
+        [{ text: '👥 Всі користувачі', callback_data: 'admin_all_users' }],
+        [{ text: '🎁 Видати підписку', callback_data: 'admin_give_sub' }],
+        [{ text: '🚫 Заблокувати', callback_data: 'admin_block' }],
+        [{ text: '✅ Розблокувати', callback_data: 'admin_unblock' }],
+        [{ text: '📋 Довідка команд', callback_data: 'admin_help' }]
+      ]
+    };
+
+    const statsText = `🔧 <b>АДМІН-ПАНЕЛЬ</b>\n\n` +
+      `👥 Всього користувачів: ${total}\n` +
+      `🚫 Заблоковано: ${blocked}\n` +
+      `✅ Активні: ${counts['active'] || 0}\n` +
+      `⏳ На розгляді: ${counts['waiting_purpose'] || 0}\n` +
+      `✔️ Затверджені: ${counts['purpose_approved'] || 0}\n\n` +
+      `Виберіть дію:`;
+
+    bot.editMessageText(statsText, {
+      chat_id: chatId,
+      message_id: query.message.message_id,
+      parse_mode: 'HTML',
+      reply_markup: adminMenu
+    });
+  }
+
+  bot.answerCallbackQuery(query.id);
+});
+
+// Обробка текстових повідомлень для адміна (пошук, блокування тощо)
+bot.on('message', async (msg) => {
+  if (msg.chat.type !== 'private' || msg.from.id !== ADMIN_ID) return;
+
+  const chatId = msg.chat.id;
+  const state = userState[chatId];
+
+  if (state === 'admin_search_user') {
+    const userId = parseInt(msg.text);
+    if (isNaN(userId)) return bot.sendMessage(chatId, '❌ Введіть коректний ID.');
+
+    const user = await getUser(userId);
+    if (!user) return bot.sendMessage(chatId, '❌ Користувача не знайдено.');
+
+    const userInfo = `📋 <b>Інформація</b>\n\n` +
+      `🆔 ID: ${userId}\n` +
+      `👤 Ім'я: ${user.name || '—'}\n` +
+      `📧 Email: ${user.email || '—'}\n` +
+      `🔐 Статус: ${user.state || '—'}\n` +
+      `💎 Підписка: ${user.subscriptionStatus || 'немає'}\n` +
+      `🚫 Заблокований: ${user.blocked ? 'Так' : 'Ні'}`;
+
+    bot.sendMessage(chatId, userInfo, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🎁 Видати підписку', callback_data: `admin_sub_${userId}` }],
+          [{ text: '🚫 Заблокувати', callback_data: `admin_block_${userId}` }]
+        ]
+      }
+    });
+    delete userState[chatId];
+
+  } else if (state === 'admin_block_id') {
+    const userId = parseInt(msg.text);
+    if (isNaN(userId)) return bot.sendMessage(chatId, '❌ Введіть коректний ID.');
+
+    const user = await getUser(userId);
+    if (!user) return bot.sendMessage(chatId, '❌ Користувача не знайдено.');
+
+    await blockUser(userId, 'Заблокований адміністратором');
+    bot.sendMessage(chatId, `✅ Користувача ${userId} заблоковано.`);
+    delete userState[chatId];
+
+  } else if (state === 'admin_unblock_id') {
+    const userId = parseInt(msg.text);
+    if (isNaN(userId)) return bot.sendMessage(chatId, '❌ Введіть коректний ID.');
+
+    const user = await getUser(userId);
+    if (!user) return bot.sendMessage(chatId, '❌ Користувача не знайдено.');
+
+    await updateUser(userId, { blocked: false, blockReason: null });
+    bot.sendMessage(chatId, `✅ Користувача ${userId} розблоковано.`);
+    delete userState[chatId];
+
+  } else if (state === 'admin_give_sub_id') {
+    const userId = parseInt(msg.text);
+    if (isNaN(userId)) return bot.sendMessage(chatId, '❌ Введіть коректний ID.');
+
+    const user = await getUser(userId);
+    if (!user) return bot.sendMessage(chatId, '❌ Користувача не знайдено.');
+
+    const subMenu = {
+      reply_markup: {
+        inline_keyboard: [
+          ...PLANS.filter(p => p.id !== 'free').map(plan =>
+            [{ text: plan.label, callback_data: `admin_grant_${userId}_${plan.id}` }]
+          ),
+          [{ text: '🔙 Назад', callback_data: 'admin_back' }]
+        ]
+      }
+    };
+
+    bot.sendMessage(chatId, `🎁 Виберіть тариф для ${userId}:`, subMenu);
+    delete userState[chatId];
+  }
+});
+
+// ============================================================
 // АДМІН: видача підписки з вибором терміну
 // ============================================================
 // Нову дату завершення рахуємо стекінгом (як у платіжному боті): якщо
