@@ -74,9 +74,9 @@ function kyivWallTimeToUTC(year, monthIndex, day, hour = 0, minute = 0) {
   return new Date(naiveUTC.getTime() - offsetMs);
 }
 
-// ✅ Firebase init
+// ✅ Firebase init (для платежів та інших даних)
 const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+const firebaseDb = getDatabase(app);
 
 // ✅ Telegram bot init
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
@@ -107,7 +107,7 @@ function generateAccessKey() {
 }
 
 async function getOrCreateAccessKey(chatId) {
-  const userKeyRef = ref(db, `users/${chatId}/accessKey`);
+  const userKeyRef = ref(firebaseDb, `users/${chatId}/accessKey`);
   const snapshot = await get(userKeyRef);
   if (snapshot.exists()) {
     return { key: snapshot.val(), isNew: false };
@@ -116,7 +116,7 @@ async function getOrCreateAccessKey(chatId) {
   const key = generateAccessKey();
   await Promise.all([
     set(userKeyRef, key),
-    set(ref(db, `accessKeys/${key}`), String(chatId))
+    set(ref(firebaseDb, `accessKeys/${key}`), String(chatId))
   ]);
   return { key, isNew: true };
 }
@@ -131,7 +131,7 @@ function generateCardNumber() {
 }
 
 async function getOrCreateCardNumber(chatId) {
-  const cardRef = ref(db, `users/${chatId}/cardNumber`);
+  const cardRef = ref(firebaseDb, `users/${chatId}/cardNumber`);
   const snapshot = await get(cardRef);
   if (snapshot.exists()) {
     return snapshot.val();
@@ -177,7 +177,7 @@ function generateIban(chatId) {
 }
 
 async function getOrCreateIban(chatId) {
-  const ibanRef = ref(db, `users/${chatId}/iban`);
+  const ibanRef = ref(firebaseDb, `users/${chatId}/iban`);
   const snapshot = await get(ibanRef);
   if (snapshot.exists()) {
     return snapshot.val();
@@ -868,7 +868,7 @@ bot.onText(/^\/start/, async (msg) => {
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       };
-      await set(ref(db, `users/${chatId}`), user);
+      await set(ref(firebaseDb, `users/${chatId}`), user);
     }
 
     if (user.state === 'registered') {
@@ -954,7 +954,7 @@ bot.onText(/^\/unblock\s+(-?\d+)/, async (msg, match) => {
 
 bot.onText(/^\/stats/, async (msg) => {
   if (!isAdminMessage(msg)) return;
-  const snapshot = await get(ref(db, 'users'));
+  const snapshot = await get(ref(firebaseDb, 'users'));
   const all = snapshot.val() || {};
   const counts = {};
   let blocked = 0;
@@ -1373,7 +1373,7 @@ async function adminGrantSub(targetId, plan) {
   const expiryReminder = plan.days !== null &&
     (new Date(newEndIso).getTime() - Date.now()) > (25 * 60 * 60 * 1000);
 
-  await update(ref(db, `users/${targetId}`), {
+  await update(ref(firebaseDb, `users/${targetId}`), {
     subscriptionStatus: plan.days === null ? 'lifetime' : true,
     subscriptionEndDate: newEndIso,
     expiryReminder,
@@ -1418,7 +1418,7 @@ bot.onText(/^\/givesub\s+(-?\d+)/, async (msg, match) => {
 const TX_PAGE_SIZE = 3;
 
 async function getSortedTransactions(chatId) {
-  const snapshot = await get(ref(db, `transactions/${chatId}`));
+  const snapshot = await get(ref(firebaseDb, `transactions/${chatId}`));
   const val = snapshot.val() || {};
   return Object.entries(val)
     .map(([key, tx]) => ({ key, ...tx }))
@@ -1467,7 +1467,7 @@ async function sendTransactionHistoryPage(chatId, page) {
 }
 
 async function sendTransactionDetail(chatId, key, page) {
-  const snapshot = await get(ref(db, `transactions/${chatId}/${key}`));
+  const snapshot = await get(ref(firebaseDb, `transactions/${chatId}/${key}`));
   const tx = snapshot.val();
 
   if (!tx) {
@@ -1490,7 +1490,7 @@ async function sendTransactionDetail(chatId, key, page) {
 }
 
 async function adjustBalance(chatId, delta) {
-  const balanceRef = ref(db, `balance/${chatId}`);
+  const balanceRef = ref(firebaseDb, `balance/${chatId}`);
   const snapshot = await get(balanceRef);
   const current = snapshot.val();
   const currentValue = current?.value ? parseFloat(current.value) : 0;
@@ -1498,7 +1498,7 @@ async function adjustBalance(chatId, delta) {
 }
 
 async function sendDeleteTransactionConfirm(chatId, key, page) {
-  const snapshot = await get(ref(db, `transactions/${chatId}/${key}`));
+  const snapshot = await get(ref(firebaseDb, `transactions/${chatId}/${key}`));
   const tx = snapshot.val();
   if (!tx) return sendTransactionHistoryPage(chatId, page);
 
@@ -1513,7 +1513,7 @@ async function sendDeleteTransactionConfirm(chatId, key, page) {
 }
 
 async function handleDeleteTransaction(chatId, key, page) {
-  const txRef = ref(db, `transactions/${chatId}/${key}`);
+  const txRef = ref(firebaseDb, `transactions/${chatId}/${key}`);
   const snapshot = await get(txRef);
   const tx = snapshot.val();
   if (!tx) return sendTransactionHistoryPage(chatId, page);
@@ -1526,7 +1526,7 @@ async function handleDeleteTransaction(chatId, key, page) {
 }
 
 async function handleCloneTransaction(chatId, key) {
-  const snapshot = await get(ref(db, `transactions/${chatId}/${key}`));
+  const snapshot = await get(ref(firebaseDb, `transactions/${chatId}/${key}`));
   const tx = snapshot.val();
   if (!tx) return sendTransactionHistoryPage(chatId, 0);
 
@@ -1541,7 +1541,7 @@ async function handleCloneTransaction(chatId, key) {
   };
 
   await Promise.all([
-    push(ref(db, `transactions/${chatId}`), clone),
+    push(ref(firebaseDb, `transactions/${chatId}`), clone),
     adjustBalance(chatId, parseFloat(clone.amount))
   ]);
 
@@ -1581,7 +1581,7 @@ async function handleEditTransactionDate(chatId, text) {
     return bot.sendMessage(chatId, '❌ Невірний формат. Приклад: `15.07.2026 14:30`', { parse_mode: 'Markdown' });
   }
 
-  const txRef = ref(db, `transactions/${chatId}/${key}`);
+  const txRef = ref(firebaseDb, `transactions/${chatId}/${key}`);
   const snapshot = await get(txRef);
   const tx = snapshot.val();
   userState[chatId] = null;
@@ -1873,7 +1873,7 @@ function handleFinanceMessage(chatId, text, msg) {
     const num = parseFloat(text);
     if (isNaN(num)) return bot.sendMessage(chatId, '❌ Введіть коректне число.');
 
-    set(ref(db, `balance/${chatId}`), { value: num.toFixed(2) })
+    set(ref(firebaseDb, `balance/${chatId}`), { value: num.toFixed(2) })
       .then(() => {
         bot.sendMessage(chatId, `✅ Баланс ${num.toFixed(2)} ₴ збережено.`);
         userState[chatId] = null;
@@ -2209,7 +2209,7 @@ case 'enter_sender_name':
   // Номер картки отримувача (mono-переказ) — для відображення у квитанції
   if (state.cardNumber) transaction.cardNumber = state.cardNumber;
 
-  const balanceRef = ref(db, `balance/${chatId}`);
+  const balanceRef = ref(firebaseDb, `balance/${chatId}`);
 
   // Отримуємо поточний баланс
   get(balanceRef).then(snapshot => {
@@ -2225,7 +2225,7 @@ case 'enter_sender_name':
 
     // Зберігаємо транзакцію та оновлюємо баланс
     return Promise.all([
-      push(ref(db, `transactions/${chatId}`), transaction),
+      push(ref(firebaseDb, `transactions/${chatId}`), transaction),
       set(balanceRef, { value: newBalance.toFixed(2) })
     ]);
   }).then(() => {
@@ -2253,11 +2253,11 @@ case 'enter_sender_name':
 // Тут ми доставляємо його користувачу саме в цьому (головному) боті
 // і прибираємо з черги. Якщо бот був вимкнений — доставимо після старту.
 // ============================================================
-onChildAdded(ref(db, 'notifications'), async (snap) => {
+onChildAdded(ref(firebaseDb, 'notifications'), async (snap) => {
   const key = snap.key;
   const n = snap.val();
   if (!n || !n.chatId) {
-    try { await remove(ref(db, `notifications/${key}`)); } catch (_) {}
+    try { await remove(ref(firebaseDb, `notifications/${key}`)); } catch (_) {}
     return;
   }
   try {
@@ -2275,7 +2275,7 @@ onChildAdded(ref(db, 'notifications'), async (snap) => {
   } catch (err) {
     console.error('Помилка доставки сповіщення про оплату:', err.message);
   } finally {
-    try { await remove(ref(db, `notifications/${key}`)); } catch (_) {}
+    try { await remove(ref(firebaseDb, `notifications/${key}`)); } catch (_) {}
   }
 });
 
@@ -2291,7 +2291,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 async function checkExpiringSubscriptions() {
   try {
-    const snap = await get(ref(db, 'users'));
+    const snap = await get(ref(firebaseDb, 'users'));
     const users = snap.val() || {};
     const now = Date.now();
 
@@ -2325,7 +2325,7 @@ async function checkExpiringSubscriptions() {
         { reply_markup: { inline_keyboard: rows } }
       ).catch(() => {});
 
-      await update(ref(db, `users/${chatId}/notified`), { expiryFor: user.subscriptionEndDate });
+      await update(ref(firebaseDb, `users/${chatId}/notified`), { expiryFor: user.subscriptionEndDate });
     }
   } catch (err) {
     console.error('Помилка перевірки підписок, що завершуються:', err.message);
