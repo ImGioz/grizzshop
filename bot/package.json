@@ -8,10 +8,12 @@
     "dotenv": "^17.4.2",
     "firebase": "^11.10.0",
     "image-size": "^2.0.2",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "sqlite3": "^5.1.7"
   },
   "scripts": {
     "start": "node bot.js",
-    "payment": "node payment-bot.js"
+    "payment": "node payment-bot.js",
+    "init-db": "node db-init.js"
   }
 }

@@ -8,6 +8,13 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 
+// 📦 SQLite БД для бота
+const db = require('./db');
+db.initDB().catch(err => {
+  console.error('❌ Не вдалося ініціалізувати БД:', err);
+  process.exit(1);
+});
+
 // 🔐 Telegram bot token from .env
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 
@@ -295,13 +302,32 @@ function formatUserTag(user, chatId) {
 // РОБОТА З КОРИСТУВАЧЕМ У FIREBASE
 // ============================================================
 
-async function getUser(chatId) {
-  const snapshot = await get(ref(db, `users/${chatId}`));
-  return snapshot.val();
+async function getUser(userId) {
+  return await db.get('SELECT * FROM users WHERE id = ?', [userId]);
 }
 
-async function updateUser(chatId, patch) {
-  await update(ref(db, `users/${chatId}`), { ...patch, updatedAt: new Date().toISOString() });
+async function updateUser(userId, patch) {
+  const now = new Date().toISOString();
+  const fields = [...Object.keys(patch), 'updatedAt'];
+  const values = [...Object.values(patch), now];
+  const sql = `UPDATE users SET ${fields.map(f => `${f} = ?`).join(', ')} WHERE id = ?`;
+  values.push(userId);
+  await db.run(sql, values);
+}
+
+async function createUser(userId, data = {}) {
+  const now = new Date().toISOString();
+  const sql = `INSERT OR IGNORE INTO users (id, name, email, phone, state, createdAt, updatedAt)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`;
+  await db.run(sql, [
+    userId,
+    data.name || null,
+    data.email || null,
+    data.phone || null,
+    data.state || 'new',
+    now,
+    now
+  ]);
 }
 
 // Єдине джерело правди про стан підписки користувача.
@@ -951,17 +977,16 @@ const USERS_PER_PAGE = 5;
 
 // Головне меню адміністратора
 async function showAdminMenu(chatId, messageId = null) {
-  const snapshot = await get(ref(db, 'users'));
-  const allUsers = snapshot.val() || {};
-  const total = Object.keys(allUsers).length;
+  const allUsers = await db.all('SELECT * FROM users');
+  const total = allUsers.length;
 
   let withSub = 0;
   let totalRevenue = 0;
 
-  Object.values(allUsers).forEach((u) => {
+  allUsers.forEach((u) => {
     if (u.subscriptionStatus) withSub++;
-    if (u.lastPayment && u.lastPayment.amount) {
-      totalRevenue += parseFloat(u.lastPayment.amount) || 0;
+    if (u.lastPaymentAmount) {
+      totalRevenue += parseFloat(u.lastPaymentAmount) || 0;
     }
   });
 
@@ -1004,20 +1029,19 @@ async function showAdminMenu(chatId, messageId = null) {
 
 // Аналітика та звіти
 async function showAnalytics(chatId, messageId) {
-  const snapshot = await get(ref(db, 'users'));
-  const allUsers = snapshot.val() || {};
+  const allUsers = await db.all('SELECT * FROM users');
 
-  const total = Object.keys(allUsers).length;
+  const total = allUsers.length;
   let withSub = 0;
   let totalRevenue = 0;
   let newUsersToday = 0;
   const now = Date.now();
   const oneDayMs = 24 * 60 * 60 * 1000;
 
-  Object.values(allUsers).forEach((u) => {
+  allUsers.forEach((u) => {
     if (u.subscriptionStatus) withSub++;
-    if (u.lastPayment && u.lastPayment.amount) {
-      totalRevenue += parseFloat(u.lastPayment.amount) || 0;
+    if (u.lastPaymentAmount) {
+      totalRevenue += parseFloat(u.lastPaymentAmount) || 0;
     }
     if (u.createdAt) {
       const createdMs = new Date(u.createdAt).getTime();
@@ -1025,7 +1049,8 @@ async function showAnalytics(chatId, messageId) {
     }
   });
 
-  const churnRate = total > 0 ? ((Object.values(allUsers).filter(u => u.blocked).length / total) * 100).toFixed(1) : 0;
+  const blockedCount = allUsers.filter(u => u.blocked).length;
+  const churnRate = total > 0 ? ((blockedCount / total) * 100).toFixed(1) : 0;
 
   const analyticsText = `📊 <b>АНАЛІТИКА І ЗВІТИ</b>\n\n` +
     `<b>Користувачі:</b>\n` +
@@ -1052,28 +1077,25 @@ async function showAnalytics(chatId, messageId) {
 
 // Меню користувачів
 async function showUsersMenu(chatId, page = 0, messageId) {
-  const snapshot = await get(ref(db, 'users'));
-  const allUsers = snapshot.val() || {};
-  const userEntries = Object.entries(allUsers);
-
-  const total = userEntries.length;
+  const allUsers = await db.all('SELECT * FROM users ORDER BY createdAt DESC');
+  const total = allUsers.length;
   const startIdx = page * USERS_PER_PAGE;
   const endIdx = startIdx + USERS_PER_PAGE;
-  const pageUsers = userEntries.slice(startIdx, endIdx);
+  const pageUsers = allUsers.slice(startIdx, endIdx);
   const totalPages = Math.ceil(total / USERS_PER_PAGE);
 
   const header = `👥 <b>КОРИСТУВАЧІ</b> (${page + 1}/${totalPages})\n\n`;
   const usersList = pageUsers
-    .map(([id, user], idx) => {
+    .map((user, idx) => {
       const sub = user.subscriptionStatus ? '💎' : '—';
       const blocked = user.blocked ? '🚫' : '';
       return `${startIdx + idx + 1}. ${blocked} ${sub} ${user.name || '(без імені)'}`;
     })
     .join('\n');
 
-  const keyboard = pageUsers.map(([id, user], idx) => [{
+  const keyboard = pageUsers.map((user, idx) => [{
     text: `${startIdx + idx + 1}. ${user.name || '(без імені)'}`,
-    callback_data: `admin_user_${id}`
+    callback_data: `admin_user_${user.id}`
   }]);
 
   const navButtons = [];
