@@ -313,6 +313,9 @@ async function updateUser(userId, patch) {
   const sql = `UPDATE users SET ${fields.map(f => `${f} = ?`).join(', ')} WHERE id = ?`;
   values.push(userId);
   await db.run(sql, values);
+
+  // Синхронізація в Firebase для сайту
+  await syncUserToFirebase(userId);
 }
 
 async function createUser(userId, data = {}) {
@@ -328,6 +331,35 @@ async function createUser(userId, data = {}) {
     now,
     now
   ]);
+
+  // Синхронізація в Firebase для сайту
+  await syncUserToFirebase(userId);
+}
+
+// Синхронізація пользователя з SQLite в Firebase
+async function syncUserToFirebase(userId) {
+  try {
+    const user = await getUser(userId);
+    if (!user) return;
+
+    await update(ref(firebaseDb, `users/${userId}`), {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone,
+      state: user.state,
+      subscriptionStatus: user.subscriptionStatus,
+      subscriptionEndDate: user.subscriptionEndDate,
+      blocked: user.blocked ? true : false,
+      blockReason: user.blockReason,
+      lastPaymentAmount: user.lastPaymentAmount,
+      lastPaymentPlanId: user.lastPaymentPlanId,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt
+    });
+  } catch (err) {
+    console.error(`Помилка синхронізації користувача ${userId} в Firebase:`, err);
+  }
 }
 
 // Єдине джерело правди про стан підписки користувача.
