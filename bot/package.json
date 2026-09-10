@@ -1,0 +1,17 @@
+{
+  "name": "grizzshop-bots",
+  "version": "1.0.0",
+  "description": "Telegram bots for GrizzShop",
+  "main": "bot.js",
+  "private": true,
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "firebase": "^11.10.0",
+    "image-size": "^2.0.2",
+    "node-telegram-bot-api": "^0.66.0"
+  },
+  "scripts": {
+    "start": "node bot.js",
+    "payment": "node payment-bot.js"
+  }
+}
